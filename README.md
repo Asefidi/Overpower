@@ -1,22 +1,23 @@
-# Introducing Dominion Overpower, an Agent Based Model of the Fossil Fuel Supply chain
+# Introducing Overpower, an Agent Based Model of the Fossil Fuel Supply chain
 
 ## I. Executive Summary
-America's national energy security is currently modeled using 20th-century econometric tools that prioritize smoothed averages of rational homogenous agents over the messy granular reality. 
+America's national energy security is currently modeled using 20th-century econometric tools that prioritize smoothed averages of rational homogenous agents over the gritty complex and chaotic reality of supply chains. 
 Overpower is a high-fidelity Agent-Based Model (ABM) designed to simulate the micro-decisions of every major firm in the fossil fuel supply chain and create a testing lab for economic strategy. 
 By modeling the system from the bottom-up, we identify non-linear failure points that traditional models systematically ignore and create a clear interface for understanding strategic outcomes and adverserial actions.
 ## II: Background:
 One of the primary weapons used by America's adversaries to destabilize American interests, extract concessions, and apply diplomatic force on our country and its allies has historically been the supply of fossil fuels.
-As energy rich adversaries occupying geopolitical chokepoints in the global energy supply, Russia and Iran have the strategic advantage of using Hormuz and cheap Russian oil as a bargaining chip to extract massive concessions from America and its allies.
+As energy rich adversaries occupying geopolitical choke-points in the global energy supply, Russia and Iran have the strategic advantage of using Hormuz and cheap Russian oil as a bargaining chip to extract massive concessions from America and its allies.
 
 This geopolitical choke-hold held by our adversaries is an intolerable vulnerability and leaves us exposed to an immense level of harm from hostile adversaries, necessitating better macroeconomic models to explain 
 
 Econometric models aggregate millions of heterogeneous individuals into homogenous statistical averages, erasing the complex micro-level behaviors and information asymmetries that actually drive outcomes and missing small seemingly insignificant events with disastrous consequences for national security. 
 
 ## III: Introduction:
-Dominion Overpower is a simplified version of my primary work in Dominion Outcompute tracking the global supply chain
-for Gasoline from extraction to consumption.
+ Overpower is a simplified version of my primary research at the University of Toronto building a predictive semiconductor supply chain model. 
+ Overpower attempts to model the supply chain for fuel from extraction to consumption.
 
-Overpower is a Bottom-up Agent Based Model using agent base heuristics to model the asymmetric information availability, consumption and investment decisions of every major firm and model the aggregate effects of micro-decisions on the overall price and availability of fossil fuels for both civilian and military needs.
+Overpower Uses agent base heuristics to model the asymmetric information availability, consumption and investment decisions of every major firm and understand the aggregate effects of micro-decisions on the overall price and availability of fossil fuels for both civilian and military needs. 
+Overpower attempts to forecast the second order effects of supply chain disruptions on both energy price and availability and prepare  Department of Defense logisticians and combatant commanders for previously unforeseeable disruptions and ensure operational energy readiness and the resilience of contested logistics networks against adversarial gray-zone tactics.
 
 ## IV: Methodology:
 Overpower will model four distinct types of agents: Capital Allocators, Households, Governments, and firms.
