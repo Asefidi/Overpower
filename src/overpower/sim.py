@@ -1704,7 +1704,10 @@ def step_world(
             cover_markup += 0.10
         shortage_markup = 1.0 + locality_shortage_ratio[locality_id] * 0.65 + max(0.0, locality.fear_multiplier - 1.0) * 0.35
         crude_noise = 1.0 + _stable_noise(config.seed, world.week, f"crude-price:{locality_id}") * 0.025
-        new_crude_prices[locality_id] = _clamp(observed_crude * cover_markup * shortage_markup * crude_noise, 24.0, 260.0)
+        raw_crude_price = observed_crude * cover_markup * shortage_markup * crude_noise
+        if not _is_baseline_scenario(scenario):
+            raw_crude_price = min(raw_crude_price, last_crude * 1.55, 180.0)
+        new_crude_prices[locality_id] = _clamp(raw_crude_price, 24.0, 260.0)
 
         product_fulfillment_ratio[locality_id] = {}
         new_product_prices[locality_id] = {}

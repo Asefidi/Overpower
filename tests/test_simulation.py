@@ -148,6 +148,24 @@ class OverpowerSimulationTests(unittest.TestCase):
         self.assertTrue(any("Route pressure" in event for event in stressed.top_events))
         self.assertTrue(any("Panic signal" in event for event in stressed.top_events))
 
+    def test_ui_hormuz_warm_start_does_not_run_away_crude_prices(self) -> None:
+        from overpower.ui import _baseline_equilibrium_config
+
+        config = _baseline_equilibrium_config("hormuz_squeeze", "steady_state")
+        world = build_world(config)
+        results = run_n_steps(world, config, self.scenarios, 8, self.military_strategies)
+        peak_average_crude = max(
+            sum(step.crude_price_by_locality.values()) / len(step.crude_price_by_locality)
+            for step in results
+        )
+        peak_local_crude = max(
+            max(step.crude_price_by_locality.values())
+            for step in results
+        )
+
+        self.assertLess(peak_average_crude, 160.0)
+        self.assertLessEqual(peak_local_crude, 180.0)
+
     def test_default_shipping_multiplier_is_user_facing_only(self) -> None:
         config = SimulationConfig()
         self.assertEqual(config.policy_controls.shipping_cost_multiplier, DEFAULT_SHIPPING_COST_MULTIPLIER)
