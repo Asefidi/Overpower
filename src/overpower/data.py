@@ -7,7 +7,10 @@ from pathlib import Path
 
 from .sim import (
     BASE_PRODUCT_PRICES,
+    DEFAULT_SPR_INVENTORY_BBL,
+    HOUSEHOLD_QUARTILES,
     PRODUCTS,
+    SPR_STORAGE_CAPACITY_BBL,
     CrudeProducerAgent,
     DemandAgent,
     LocalityState,
@@ -58,6 +61,7 @@ COUNTRY_ALIASES = {
     "Republic of China Taiwan": "Taiwan",
     "Republic of Korea": "South Korea",
     "Russian Federation": "Russia",
+    "US": "United States",
 }
 
 CENTCOM_COUNTRIES = (
@@ -160,6 +164,18 @@ HOUSEHOLD_PRICE_PRIORITIES = {
     "q4": {"gasoline": 1.16, "diesel": 0.92, "jet": 0.0},
 }
 
+NORTHCOM_MILITARY_BUY_SHARES = {
+    "gasoline": 0.00,
+    "diesel": 0.03,
+    "jet": 0.08,
+}
+
+NORTHCOM_MILITARY_PRICE_PRIORITIES = {
+    "gasoline": 0.0,
+    "diesel": 1.72,
+    "jet": 1.92,
+}
+
 EXTRACTION_COST_BY_LOCALITY = {
     "AFRICOM": 43.0,
     "CENTCOM": 36.0,
@@ -172,9 +188,22 @@ EXTRACTION_COST_BY_LOCALITY = {
     "SOUTHCOM": 42.0,
 }
 
-SANCTIONED_EXPORT_BANS = {
+STRUCTURAL_ROUTE_EMBARGOES = {
     ("IRAN", "EUCOM"),
+    ("EUCOM", "IRAN"),
     ("IRAN", "NORTHCOM"),
+    ("NORTHCOM", "IRAN"),
+    ("RUSSIA", "EUCOM"),
+    ("EUCOM", "RUSSIA"),
+    ("RUSSIA", "NORTHCOM"),
+    ("NORTHCOM", "RUSSIA"),
+}
+
+MODELED_PRODUCT_DEMAND_SHARE = 0.78
+FALLBACK_PRODUCT_MIX = {
+    "gasoline": 0.54,
+    "diesel": 0.33,
+    "jet": 0.13,
 }
 
 
@@ -212,6 +241,10 @@ def _safe_share(part: float, total: float) -> float:
     return part / total
 
 
+def _bounded(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
 def _thousand_bpd_to_bbl_week(value: float) -> float:
     return value * 1_000.0 * 7.0
 
@@ -235,6 +268,21 @@ def _country_to_node(country: str, region: str) -> str:
     if normalized_country in COUNTRY_TO_NODE:
         return COUNTRY_TO_NODE[normalized_country]
     return REGION_TO_NODE.get(region, "INDOPACOM")
+
+
+def _product_mix(
+    gasoline_throughput_thousand_bpd: float,
+    diesel_throughput_thousand_bpd: float,
+    jet_throughput_thousand_bpd: float,
+) -> dict[str, float]:
+    total = gasoline_throughput_thousand_bpd + diesel_throughput_thousand_bpd + jet_throughput_thousand_bpd
+    if total <= 0:
+        return dict(FALLBACK_PRODUCT_MIX)
+    return {
+        "gasoline": gasoline_throughput_thousand_bpd / total,
+        "diesel": diesel_throughput_thousand_bpd / total,
+        "jet": jet_throughput_thousand_bpd / total,
+    }
 
 
 def _refinery_node_capacity_profile() -> dict[str, dict[str, float]]:
@@ -261,6 +309,7 @@ def _build_locality_state(
     *,
     gdp_per_capita: float,
     gini: float,
+    oil_consumption_thousand_bpd: float,
     oil_production_thousand_bpd: float,
     refinery_capacity_thousand_bpd: float,
     refinery_throughput_thousand_bpd: float,
@@ -268,6 +317,12 @@ def _build_locality_state(
     diesel_throughput_thousand_bpd: float,
     jet_throughput_thousand_bpd: float,
 ) -> LocalityState:
+    product_mix = _product_mix(
+        gasoline_throughput_thousand_bpd,
+        diesel_throughput_thousand_bpd,
+        jet_throughput_thousand_bpd,
+    )
+    modeled_products_total = _thousand_bpd_to_bbl_week(oil_consumption_thousand_bpd * MODELED_PRODUCT_DEMAND_SHARE)
     return LocalityState(
         id=locality_id,
         label=LOCALITY_LABELS[locality_id],
@@ -277,9 +332,8 @@ def _build_locality_state(
         baseline_refinery_capacity_bbl_week=_thousand_bpd_to_bbl_week(refinery_capacity_thousand_bpd),
         baseline_refinery_throughput_bbl_week=_thousand_bpd_to_bbl_week(refinery_throughput_thousand_bpd),
         base_product_demand_bbl_week={
-            "gasoline": _thousand_bpd_to_bbl_week(gasoline_throughput_thousand_bpd),
-            "diesel": _thousand_bpd_to_bbl_week(diesel_throughput_thousand_bpd),
-            "jet": _thousand_bpd_to_bbl_week(jet_throughput_thousand_bpd),
+            product: modeled_products_total * product_mix[product]
+            for product in PRODUCTS
         },
         fear_multiplier=1.0,
         position=LOCALITY_POSITIONS[locality_id],
@@ -308,6 +362,7 @@ def load_localities() -> dict[str, LocalityState]:
             node_id,
             gdp_per_capita=float(row["gdp_per_capita_usd_2024"]),
             gini=float(row["gini_coefficient_weighted_latest_wb"]),
+            oil_consumption_thousand_bpd=float(row["oil_consumption_thousand_bpd_2024"]),
             oil_production_thousand_bpd=float(row["oil_production_thousand_bpd_2024"]),
             refinery_capacity_thousand_bpd=float(row["refinery_capacity_thousand_bpd_2024"]),
             refinery_throughput_thousand_bpd=float(row["refinery_throughput_thousand_bpd_2024"]),
@@ -336,6 +391,7 @@ def load_localities() -> dict[str, LocalityState]:
             ],
             float(southcom_row["gini_coefficient_weighted_latest_wb"]),
         ),
+        oil_consumption_thousand_bpd=southcom_consumption + venezuela_consumption,
         oil_production_thousand_bpd=float(southcom_row["oil_production_thousand_bpd_2024"]) + float(venezuela_row["oil_production_thousand_bpd_2024"]),
         refinery_capacity_thousand_bpd=float(southcom_row["refinery_capacity_thousand_bpd_2024"]) + float(venezuela_row["refinery_capacity_thousand_bpd_2024"]),
         refinery_throughput_thousand_bpd=float(southcom_row["refinery_throughput_thousand_bpd_2024"]) + float(venezuela_row["refinery_throughput_thousand_bpd_2024"]),
@@ -379,6 +435,7 @@ def load_localities() -> dict[str, LocalityState]:
         "IRAN",
         gdp_per_capita=iran_gdp,
         gini=iran_gini,
+        oil_consumption_thousand_bpd=combined_consumption * iran_consumption_share,
         oil_production_thousand_bpd=combined_production * iran_production_share,
         refinery_capacity_thousand_bpd=combined_refinery_capacity * iran_refinery_capacity_share,
         refinery_throughput_thousand_bpd=combined_refinery_throughput * iran_refinery_capacity_share,
@@ -390,6 +447,7 @@ def load_localities() -> dict[str, LocalityState]:
         "CENTCOM",
         gdp_per_capita=centcom_gdp,
         gini=centcom_gini,
+        oil_consumption_thousand_bpd=combined_consumption * (1.0 - iran_consumption_share),
         oil_production_thousand_bpd=combined_production * (1.0 - iran_production_share),
         refinery_capacity_thousand_bpd=combined_refinery_capacity * (1.0 - iran_refinery_capacity_share),
         refinery_throughput_thousand_bpd=combined_refinery_throughput * (1.0 - iran_refinery_capacity_share),
@@ -482,58 +540,124 @@ def _income_multiplier(locality: LocalityState, quartile: str) -> float:
     return wealth * inequality_penalty * quartile_boost
 
 
+def _household_product_share(locality: LocalityState, product: str) -> float:
+    wealth = _bounded(locality.gdp_per_capita / 20000.0, 0.45, 2.20)
+    access_modifier = _bounded(1.0 - (locality.gini - 35.0) / 160.0, 0.80, 1.08)
+    if product == "gasoline":
+        return _bounded((0.18 + 0.11 * wealth) * access_modifier, 0.18, 0.42)
+    if product == "diesel":
+        return _bounded((0.02 + 0.03 * wealth) * access_modifier, 0.02, 0.09)
+    return 0.0
+
+
+def _household_quartile_weights(locality: LocalityState) -> dict[str, float]:
+    inequality = _bounded((locality.gini - 35.0) / 18.0, -0.7, 1.0)
+    weights = {
+        "q1": 0.22 * (1.0 - 0.38 * inequality),
+        "q2": 0.25 * (1.0 - 0.14 * inequality),
+        "q3": 0.26 * (1.0 + 0.10 * inequality),
+        "q4": 0.27 * (1.0 + 0.54 * inequality),
+    }
+    total = sum(max(0.01, value) for value in weights.values())
+    return {quartile: max(0.01, value) / total for quartile, value in weights.items()}
+
+
 def build_demand_agents(localities: dict[str, LocalityState]) -> list[DemandAgent]:
     agents: list[DemandAgent] = []
     for locality_id, locality in localities.items():
-        demand_allocations: dict[str, list[tuple[str, str, dict[str, float], dict[str, float], float]]] = defaultdict(list)
-        for sector, weights in SECTOR_VOLUME_WEIGHTS.items():
-            demand_allocations["sector"].append((
-                sector,
-                sector,
-                weights,
-                SECTOR_PRICE_PRIORITIES[sector],
-                1.0,
-            ))
-        for quartile, weights in HOUSEHOLD_VOLUME_WEIGHTS.items():
-            demand_allocations["household"].append((
-                quartile,
-                quartile,
-                weights,
-                HOUSEHOLD_PRICE_PRIORITIES[quartile],
-                _income_multiplier(locality, quartile),
-            ))
-
-        product_weight_totals = {
-            product: sum(item[2][product] for entries in demand_allocations.values() for item in entries)
+        quartile_weights = _household_quartile_weights(locality)
+        household_totals = {
+            product: locality.base_product_demand_bbl_week[product] * _household_product_share(locality, product)
             for product in PRODUCTS
         }
-        for agent_kind, entries in demand_allocations.items():
-            for segment, label, volume_weights, price_priorities, income_multiplier in entries:
-                base_demand = {}
-                for product in PRODUCTS:
-                    product_total = locality.base_product_demand_bbl_week[product] * 0.90
-                    share = volume_weights[product] / max(1e-6, product_weight_totals[product])
-                    base_demand[product] = product_total * share
-                agents.append(
-                    DemandAgent(
-                        id=f"{locality_id.lower()}-{agent_kind}-{segment}",
-                        name=f"{LOCALITY_LABELS[locality_id]} {label.replace('_', ' ').title()}",
-                        locality=locality_id,
-                        agent_kind=agent_kind,
-                        segment=segment,
-                        base_demand_bbl_week=base_demand,
-                        price_priority=dict(price_priorities),
-                        income_multiplier=income_multiplier,
-                    )
+        sector_totals = {
+            product: max(0.0, locality.base_product_demand_bbl_week[product] - household_totals[product])
+            for product in PRODUCTS
+        }
+        military_totals = {product: 0.0 for product in PRODUCTS}
+        if locality_id == "NORTHCOM":
+            military_totals = {
+                product: locality.base_product_demand_bbl_week[product] * NORTHCOM_MILITARY_BUY_SHARES[product]
+                for product in PRODUCTS
+            }
+            sector_totals = {
+                product: max(0.0, sector_totals[product] - military_totals[product])
+                for product in PRODUCTS
+            }
+
+        sector_weight_totals = {
+            product: sum(SECTOR_VOLUME_WEIGHTS[sector][product] for sector in SECTOR_VOLUME_WEIGHTS)
+            for product in PRODUCTS
+        }
+        if locality_id == "NORTHCOM":
+            agents.append(
+                DemandAgent(
+                    id="northcom-military-buyer",
+                    name="NORTHCOM Military Fuel Buyer",
+                    locality=locality_id,
+                    agent_kind="military",
+                    segment="military",
+                    base_demand_bbl_week=military_totals,
+                    price_priority=dict(NORTHCOM_MILITARY_PRICE_PRIORITIES),
+                    income_multiplier=1.0,
                 )
+            )
+
+        for sector, weights in SECTOR_VOLUME_WEIGHTS.items():
+            base_demand = {}
+            for product in PRODUCTS:
+                share = weights[product] / max(1e-6, sector_weight_totals[product])
+                base_demand[product] = sector_totals[product] * share
+            agents.append(
+                DemandAgent(
+                    id=f"{locality_id.lower()}-sector-{sector}",
+                    name=f"{LOCALITY_LABELS[locality_id]} {sector.replace('_', ' ').title()}",
+                    locality=locality_id,
+                    agent_kind="sector",
+                    segment=sector,
+                    base_demand_bbl_week=base_demand,
+                    price_priority=dict(SECTOR_PRICE_PRIORITIES[sector]),
+                    income_multiplier=1.0,
+                )
+            )
+
+        for quartile in HOUSEHOLD_QUARTILES:
+            household_product_weight_totals = {
+                product: sum(
+                    quartile_weights[candidate] * HOUSEHOLD_VOLUME_WEIGHTS[candidate][product]
+                    for candidate in HOUSEHOLD_QUARTILES
+                )
+                for product in PRODUCTS
+            }
+            base_demand = {
+                product: household_totals[product]
+                * quartile_weights[quartile]
+                * HOUSEHOLD_VOLUME_WEIGHTS[quartile][product]
+                / max(1e-6, household_product_weight_totals[product])
+                for product in PRODUCTS
+            }
+            agents.append(
+                DemandAgent(
+                    id=f"{locality_id.lower()}-household-{quartile}",
+                    name=f"{LOCALITY_LABELS[locality_id]} {quartile.upper()} Households",
+                    locality=locality_id,
+                    agent_kind="household",
+                    segment=quartile,
+                    base_demand_bbl_week=base_demand,
+                    price_priority=dict(HOUSEHOLD_PRICE_PRIORITIES[quartile]),
+                    income_multiplier=_income_multiplier(locality, quartile),
+                )
+            )
     return agents
 
 
 def _apply_structural_route_policies(routes: dict[tuple[str, str], RouteState]) -> None:
-    for key in SANCTIONED_EXPORT_BANS:
+    for key in STRUCTURAL_ROUTE_EMBARGOES:
         route = routes[key]
         route.blocked = True
         route.capacity_multiplier = 0.0
+        route.base_capacity_bbl = 0.0
+        route.shipping_cost_per_bbl = 0.0
 
 
 def build_default_routes(localities: dict[str, LocalityState]) -> dict[tuple[str, str], RouteState]:
@@ -595,38 +719,68 @@ def get_scenario_presets() -> dict[str, ScenarioPreset]:
         "baseline": ScenarioPreset(
             name="Baseline",
             description="Reference case with steady demand, explicit geopolitical blocs, and Iranian export sanctions into EUCOM/NORTHCOM enforced by default.",
+            operational_notes=(
+                "Trigger: no new disruption beyond standing embargoes against Iranian, Russian, and Venezuelan barrels.",
+                "Affected lanes/nodes: IRAN and RUSSIA have no route edge to EUCOM or NORTHCOM in either direction; Venezuelan crude is embargoed from EUCOM/NORTHCOM at the country layer.",
+                "Market mechanism: the default 1.5x shipping environment raises landed costs while local inventories keep fear near steady state.",
+            ),
         ),
         "hormuz_squeeze": ScenarioPreset(
             name="Hormuz Squeeze",
             description="A Gulf maritime squeeze hits both CENTCOM and IRAN outbound lanes, raising Asian landed costs and constraining global replacement barrels.",
+            operational_notes=(
+                "Trigger: Hormuz pressure constrains outbound Gulf cargoes from CENTCOM and IRAN.",
+                "Affected lanes/nodes: CENTCOM and IRAN outbound exports to EUCOM, NORTHCOM, INDOPACOM, and CHINA are blocked; remaining outbound lanes operate at 15% capacity with elevated shipping costs.",
+                "Supply/refinery shock: CENTCOM crude supply falls to 55%, IRAN supply falls to 45%, and regional refinery throughput is impaired.",
+                "Market mechanism: same-week panic raises refiner MWTP, producer asks, and product bids before shortages fully materialize.",
+            ),
             route_overrides=gulf_disruption_routes,
             locality_fear_shocks={
-                "CENTCOM": 0.24,
-                "IRAN": 0.30,
-                "EUCOM": 0.14,
-                "INDOPACOM": 0.18,
-                "CHINA": 0.12,
+                "CENTCOM": 0.42,
+                "IRAN": 0.55,
+                "EUCOM": 0.30,
+                "INDOPACOM": 0.36,
+                "CHINA": 0.30,
+                "NORTHCOM": 0.14,
             },
             producer_supply_shocks={"CENTCOM": 0.55, "IRAN": 0.45},
             refinery_capacity_shocks={"CENTCOM": 0.82, "IRAN": 0.72},
         ),
         "cis_disruption": ScenarioPreset(
             name="Russia Disruption",
-            description="Russian output falls sharply and EU-adjacent markets scramble for replacement barrels without treating all of EUCOM as Russia.",
-            locality_fear_shocks={"RUSSIA": 0.26, "EUCOM": 0.18},
+            description="Russian output falls sharply and EU-adjacent markets scramble for replacement barrels",
+            operational_notes=(
+                "Trigger: Russian output shock reduces exportable barrels and refinery activity in the CIS-aligned node.",
+                "Affected lanes/nodes: RUSSIA and EUCOM absorb the first panic impulse as European replacement barrels bid against global demand.",
+                "Supply/refinery shock: Russian crude supply falls to 55% and Russian refinery capacity falls to 78%.",
+                "Market mechanism: EUCOM bids up alternative feedstock while Russian local scarcity feeds higher asks into surviving routes.",
+            ),
+            locality_fear_shocks={"RUSSIA": 0.50, "EUCOM": 0.38},
             producer_supply_shocks={"RUSSIA": 0.55},
             refinery_capacity_shocks={"RUSSIA": 0.78},
         ),
         "venezuela_outage": ScenarioPreset(
             name="Venezuela Outage",
             description="A Venezuelan outage hits SOUTHCOM supply without pretending all of SOUTHCOM is Venezuela.",
-            locality_fear_shocks={"SOUTHCOM": 0.16},
+            operational_notes=(
+                "Trigger: Venezuelan production and refining capacity suffer a concentrated outage inside SOUTHCOM.",
+                "Affected lanes/nodes: SOUTHCOM takes the direct supply hit while NORTHCOM sees secondary replacement-barrel pressure.",
+                "Supply/refinery shock: Venezuelan producer output falls to 20% and Venezuelan refinery capacity falls to 28%.",
+                "Market mechanism: local shortages push SOUTHCOM fear higher and make imported replacement products clear at wider delivered-cost spreads.",
+            ),
+            locality_fear_shocks={"SOUTHCOM": 0.36, "NORTHCOM": 0.10},
             producer_country_shocks={"Venezuela": 0.20},
             refinery_country_shocks={"Venezuela": 0.28},
         ),
         "coordinated_mitigation": ScenarioPreset(
             name="Coordinated Mitigation",
             description="A policy-forward response layer that adds reserve release and refinery support.",
+            operational_notes=(
+                "Trigger: commander-directed mitigation deploys reserves and subsidies without introducing a new physical outage.",
+                "Affected lanes/nodes: reserve barrels are weighted toward NORTHCOM, EUCOM, and INDOPACOM; all routes receive a modest shipping relief factor.",
+                "Policy shock: 650 kbd reserve release, 10% refinery subsidy, 12% military priority, and 0.95x scenario shipping modifier.",
+                "Market mechanism: extra crude cover and refinery support reduce rejected bids and protect jet/diesel fulfillment for readiness.",
+            ),
             policy_defaults=PolicyControls(
                 reserve_release_kbd=650.0,
                 refinery_subsidy_pct=0.10,
@@ -657,6 +811,10 @@ def build_world(config: SimulationConfig | None = None) -> WorldState:
         locality_id: {product: locality.base_product_demand_bbl_week[product] * 0.18 for product in PRODUCTS}
         for locality_id, locality in localities.items()
     }
+    product_cost_basis = {
+        locality_id: {product: BASE_PRODUCT_PRICES[product] * 0.82 for product in PRODUCTS}
+        for locality_id in localities
+    }
     last_crude_prices = {
         locality_id: EXTRACTION_COST_BY_LOCALITY[locality_id] + 14.0
         for locality_id in localities
@@ -679,6 +837,11 @@ def build_world(config: SimulationConfig | None = None) -> WorldState:
         shipments_in_transit=[],
         crude_inventory=crude_inventory,
         product_inventory=product_inventory,
+        product_cost_basis=product_cost_basis,
+        strategic_reserve_inventory_bbl=DEFAULT_SPR_INVENTORY_BBL,
+        strategic_reserve_capacity_bbl=SPR_STORAGE_CAPACITY_BBL,
+        strategic_reserve_cash_usd=0.0,
+        strategic_reserve_pending_returns=[],
         last_crude_price_by_locality=last_crude_prices,
         last_product_prices=last_product_prices,
     )
