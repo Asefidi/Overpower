@@ -69,23 +69,50 @@ class OverpowerSimulationTests(unittest.TestCase):
 
         household = latest.household_fuel_affordability["NORTHCOM"]
         industrial = latest.industrial_output_at_risk["NORTHCOM"]
+        output = latest.industrial_output["NORTHCOM"]
 
         self.assertAlmostEqual(latest.metrics["northcom_household_fuel_affordability"], household["overall"])
         self.assertAlmostEqual(latest.metrics["northcom_industrial_output_at_risk"], industrial["overall"])
+        self.assertAlmostEqual(latest.metrics["northcom_industrial_output"], output["overall"])
+        self.assertAlmostEqual(latest.metrics["northcom_industrial_oil_input_ratio"], output["oil_input_ratio"])
         self.assertGreaterEqual(household["overall"], 0.0)
         self.assertLessEqual(household["overall"], 125.0)
         self.assertGreaterEqual(industrial["overall"], 0.0)
         self.assertLessEqual(industrial["overall"], 1.0)
+        self.assertGreaterEqual(output["overall"], 0.0)
+        self.assertLessEqual(output["overall"], 100.0)
+        self.assertGreaterEqual(output["overall"], 85.0)
+        self.assertGreaterEqual(output["oil_input_ratio"], 0.0)
+        self.assertLessEqual(output["oil_input_ratio"], 1.0)
         for quartile in HOUSEHOLD_QUARTILES:
             self.assertIn(quartile, household)
             self.assertGreaterEqual(household[quartile], 0.0)
             self.assertLessEqual(household[quartile], 125.0)
         for sector in SECTORS:
             self.assertIn(sector, industrial)
+            self.assertIn(sector, output)
             self.assertIn(f"{sector}_shortage_component", industrial)
             self.assertIn(f"{sector}_price_component", industrial)
+            self.assertIn(f"{sector}_oil_input_ratio", output)
             self.assertGreaterEqual(industrial[sector], 0.0)
             self.assertLessEqual(industrial[sector], 1.0)
+            self.assertGreaterEqual(output[sector], 0.0)
+            self.assertLessEqual(output[sector], 100.0)
+            self.assertGreaterEqual(output[f"{sector}_oil_input_ratio"], 0.0)
+            self.assertLessEqual(output[f"{sector}_oil_input_ratio"], 1.0)
+
+    def test_stress_reduces_industrial_output(self) -> None:
+        _, baseline = self._run("baseline")
+        _, stressed = self._run("hormuz_squeeze")
+
+        self.assertLess(
+            stressed.metrics["northcom_industrial_output"],
+            baseline.metrics["northcom_industrial_output"],
+        )
+        self.assertLess(
+            stressed.industrial_output["NORTHCOM"]["overall"],
+            baseline.industrial_output["NORTHCOM"]["overall"],
+        )
 
     def test_baseline_remains_stable_through_week_52(self) -> None:
         config = SimulationConfig(selected_scenario="baseline")
@@ -141,6 +168,7 @@ class OverpowerSimulationTests(unittest.TestCase):
             "red_sea_diversion",
             "nato_winter_diesel_crunch",
             "gulf_coast_hurricane",
+            "south_china_sea_blockade",
         }
         self.assertTrue(expected.issubset(self.scenarios))
         for scenario_key in expected:
@@ -153,6 +181,41 @@ class OverpowerSimulationTests(unittest.TestCase):
                 or scenario.refinery_capacity_shocks
                 or scenario.military_demand_shocks
             )
+
+    def test_south_china_sea_blockade_chokes_china_imports(self) -> None:
+        scenario = self.scenarios["south_china_sea_blockade"]
+        node_ids = set(build_world().localities)
+        blocked_origins = {
+            origin
+            for (origin, destination), override in scenario.route_overrides.items()
+            if destination == "CHINA" and bool(override.get("blocked", False))
+        }
+        self.assertEqual(blocked_origins, node_ids - {"CHINA", "RUSSIA"})
+        self.assertFalse(scenario.route_overrides[("RUSSIA", "CHINA")].get("blocked", False))
+        self.assertLessEqual(scenario.route_overrides[("RUSSIA", "CHINA")]["capacity_multiplier"], 0.25)
+
+        _, baseline_first_week = self._run("baseline", steps=1)
+        _, blockade_first_week = self._run("south_china_sea_blockade", steps=1)
+
+        self.assertGreater(
+            blockade_first_week.locality_shortage_ratio["CHINA"],
+            baseline_first_week.locality_shortage_ratio["CHINA"] + 0.20,
+        )
+
+        _, baseline = self._run("baseline")
+        _, blockade = self._run("south_china_sea_blockade")
+        self.assertLess(
+            blockade.household_fuel_affordability["CHINA"]["overall"],
+            baseline.household_fuel_affordability["CHINA"]["overall"] - 20.0,
+        )
+        self.assertLess(
+            blockade.industrial_output["CHINA"]["overall"],
+            baseline.industrial_output["CHINA"]["overall"] - 10.0,
+        )
+        self.assertGreater(
+            blockade.industrial_output_at_risk["CHINA"]["overall"],
+            baseline.industrial_output_at_risk["CHINA"]["overall"] + 0.10,
+        )
 
     def test_military_strategy_catalog(self) -> None:
         expected = {

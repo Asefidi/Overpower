@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
-from math import cos, pi, sin
+from math import cos, exp, pi, sin
 from typing import Any
 
 PRODUCTS = ("gasoline", "diesel", "jet")
@@ -83,6 +83,15 @@ INDUSTRIAL_PRODUCT_CRITICALITY = {
     "other": {"gasoline": 0.42, "diesel": 0.54, "jet": 0.36},
 }
 INDUSTRIAL_PRICE_DRAG_FACTOR = 0.32
+# Calibrated as an official-data proxy: EIA MECS 2022 Table 6.1 reports fuel
+# consumption per dollar of shipments/value added, MECS fuel-switching tables
+# bound short-run flexibility, and BEA Gross Output frames output as industry
+# sales/receipts. Source pages:
+# https://www.eia.gov/consumption/manufacturing/data/2022/
+# https://www.eia.gov/totalenergy/data/monthly/
+# https://www.bea.gov/data/industries/gross-output-by-industry
+INDUSTRIAL_OUTPUT_SIGMOID_STEEPNESS = 8.0
+INDUSTRIAL_OUTPUT_SIGMOID_MIDPOINT = 0.55
 
 
 @dataclass(slots=True)
@@ -264,6 +273,7 @@ class StepResult:
     strategic_reserve_returned_bbl: float
     household_fuel_affordability: dict[str, dict[str, float]]
     industrial_output_at_risk: dict[str, dict[str, float]]
+    industrial_output: dict[str, dict[str, float]]
     metrics: dict[str, float]
 
 
@@ -297,6 +307,27 @@ def _safe_div(numerator: float, denominator: float) -> float:
     if denominator <= 0:
         return 0.0
     return numerator / denominator
+
+
+def _industrial_oil_sigmoid(oil_input_ratio: float) -> float:
+    exponent = -INDUSTRIAL_OUTPUT_SIGMOID_STEEPNESS * (
+        oil_input_ratio - INDUSTRIAL_OUTPUT_SIGMOID_MIDPOINT
+    )
+    return 1.0 / (1.0 + exp(exponent))
+
+
+def _industrial_output_index(oil_input_ratio: float) -> float:
+    ratio = _clamp(oil_input_ratio, 0.0, 1.0)
+    low = _industrial_oil_sigmoid(0.0)
+    high = _industrial_oil_sigmoid(1.0)
+    current = _industrial_oil_sigmoid(ratio)
+    return _clamp(100.0 * _safe_div(current - low, high - low), 0.0, 100.0)
+
+
+def _industrial_economic_output_index(oil_input_ratio: float, output_at_risk: float) -> float:
+    physical_index = _industrial_output_index(oil_input_ratio)
+    risk_adjusted_index = 100.0 * (1.0 - _clamp(output_at_risk, 0.0, 1.0))
+    return _clamp(min(physical_index, risk_adjusted_index), 0.0, 100.0)
 
 
 def _weighted_average(trades: list[tuple[float, float]], fallback: float) -> float:
@@ -1242,13 +1273,18 @@ def _empty_household_bucket() -> dict[str, float]:
 
 
 def _empty_industrial_bucket() -> dict[str, float]:
-    return {"weighted_demand_bbl": 0.0, "weighted_unmet_bbl": 0.0, "weighted_price_drag_bbl": 0.0}
+    return {
+        "weighted_demand_bbl": 0.0,
+        "weighted_fulfilled_bbl": 0.0,
+        "weighted_unmet_bbl": 0.0,
+        "weighted_price_drag_bbl": 0.0,
+    }
 
 
 def _calculate_economic_indicators(
     product_prices: dict[str, dict[str, float]],
     agent_product_outcomes: dict[tuple[str, str], dict[str, Any]],
-) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
+) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]], dict[str, dict[str, float]]]:
     household_buckets: dict[str, dict[str, dict[str, float]]] = defaultdict(
         lambda: defaultdict(_empty_household_bucket)
     )
@@ -1283,6 +1319,7 @@ def _calculate_economic_indicators(
                 continue
             segment_weight = INDUSTRIAL_SEGMENT_OUTPUT_WEIGHTS.get(segment, 1.0)
             weighted_demand = demand_bbl * criticality * segment_weight
+            weighted_fulfilled = fulfilled_bbl * criticality * segment_weight
             weighted_unmet = unmet_bbl * criticality * segment_weight
             price_ratio = price / max(1.0, BASE_PRODUCT_PRICES[product])
             weighted_price_drag = (
@@ -1295,6 +1332,7 @@ def _calculate_economic_indicators(
             for bucket_name in (segment, "overall"):
                 bucket = industrial_buckets[locality_id][bucket_name]
                 bucket["weighted_demand_bbl"] += weighted_demand
+                bucket["weighted_fulfilled_bbl"] += weighted_fulfilled
                 bucket["weighted_unmet_bbl"] += weighted_unmet
                 bucket["weighted_price_drag_bbl"] += weighted_price_drag
 
@@ -1337,6 +1375,17 @@ def _calculate_economic_indicators(
         }
         for locality_id in product_prices
     }
+    industrial_output_scores = {
+        locality_id: {
+            "overall": 100.0,
+            "oil_input_ratio": 1.0,
+            "input_weight_bbl": 0.0,
+            **{sector: 100.0 for sector in SECTORS},
+            **{f"{sector}_oil_input_ratio": 1.0 for sector in SECTORS},
+            **{f"{sector}_input_weight_bbl": 0.0 for sector in SECTORS},
+        }
+        for locality_id in product_prices
+    }
     for locality_id, locality_buckets in industrial_buckets.items():
         industrial_scores.setdefault(
             locality_id,
@@ -1349,9 +1398,25 @@ def _calculate_economic_indicators(
                 **{f"{sector}_price_component": 0.0 for sector in SECTORS},
             },
         )
+        industrial_output_scores.setdefault(
+            locality_id,
+            {
+                "overall": 100.0,
+                "oil_input_ratio": 1.0,
+                "input_weight_bbl": 0.0,
+                **{sector: 100.0 for sector in SECTORS},
+                **{f"{sector}_oil_input_ratio": 1.0 for sector in SECTORS},
+                **{f"{sector}_input_weight_bbl": 0.0 for sector in SECTORS},
+            },
+        )
         for bucket_name, bucket in locality_buckets.items():
             shortage_component = _clamp(
                 _safe_div(bucket["weighted_unmet_bbl"], bucket["weighted_demand_bbl"]),
+                0.0,
+                1.0,
+            )
+            oil_input_ratio = _clamp(
+                _safe_div(bucket["weighted_fulfilled_bbl"], bucket["weighted_demand_bbl"]),
                 0.0,
                 1.0,
             )
@@ -1361,16 +1426,23 @@ def _calculate_economic_indicators(
                 max(0.0, 1.0 - shortage_component),
             )
             output_at_risk = shortage_component + price_component
+            output_index = _industrial_economic_output_index(oil_input_ratio, output_at_risk)
             if bucket_name == "overall":
                 industrial_scores[locality_id]["overall"] = output_at_risk
                 industrial_scores[locality_id]["shortage_component"] = shortage_component
                 industrial_scores[locality_id]["price_component"] = price_component
+                industrial_output_scores[locality_id]["overall"] = output_index
+                industrial_output_scores[locality_id]["oil_input_ratio"] = oil_input_ratio
+                industrial_output_scores[locality_id]["input_weight_bbl"] = bucket["weighted_demand_bbl"]
             else:
                 industrial_scores[locality_id][bucket_name] = output_at_risk
                 industrial_scores[locality_id][f"{bucket_name}_shortage_component"] = shortage_component
                 industrial_scores[locality_id][f"{bucket_name}_price_component"] = price_component
+                industrial_output_scores[locality_id][bucket_name] = output_index
+                industrial_output_scores[locality_id][f"{bucket_name}_oil_input_ratio"] = oil_input_ratio
+                industrial_output_scores[locality_id][f"{bucket_name}_input_weight_bbl"] = bucket["weighted_demand_bbl"]
 
-    return household_scores, industrial_scores
+    return household_scores, industrial_scores, industrial_output_scores
 
 
 def _generate_events(
@@ -1702,12 +1774,26 @@ def step_world(
         scheduled_return.volume_bbl
         for scheduled_return in world.strategic_reserve_pending_returns
     )
-    household_fuel_affordability, industrial_output_at_risk = _calculate_economic_indicators(
+    household_fuel_affordability, industrial_output_at_risk, industrial_output = _calculate_economic_indicators(
         new_product_prices,
         product_auction.agent_product_outcomes,
     )
     northcom_household = household_fuel_affordability.get("NORTHCOM", {})
     northcom_industrial = industrial_output_at_risk.get("NORTHCOM", {})
+    northcom_output = industrial_output.get("NORTHCOM", {})
+    global_industrial_output_weight = sum(
+        locality_scores.get("input_weight_bbl", 0.0)
+        for locality_scores in industrial_output.values()
+    )
+    global_industrial_output = (
+        sum(
+            locality_scores.get("overall", 100.0) * locality_scores.get("input_weight_bbl", 0.0)
+            for locality_scores in industrial_output.values()
+        )
+        / global_industrial_output_weight
+        if global_industrial_output_weight > 0.0
+        else 100.0
+    )
 
     placeholder_result = StepResult(
         week=world.week,
@@ -1730,6 +1816,7 @@ def step_world(
         strategic_reserve_returned_bbl=reserve_operation.returned_bbl,
         household_fuel_affordability=household_fuel_affordability,
         industrial_output_at_risk=industrial_output_at_risk,
+        industrial_output=industrial_output,
         metrics={
             "total_shortage_bbl": total_shortage,
             "total_demand_bbl": total_demand,
@@ -1741,6 +1828,9 @@ def step_world(
             "northcom_industrial_output_at_risk": northcom_industrial.get("overall", 0.0),
             "northcom_industrial_shortage_component": northcom_industrial.get("shortage_component", 0.0),
             "northcom_industrial_price_component": northcom_industrial.get("price_component", 0.0),
+            "northcom_industrial_output": northcom_output.get("overall", 100.0),
+            "northcom_industrial_oil_input_ratio": northcom_output.get("oil_input_ratio", 1.0),
+            "global_industrial_output": global_industrial_output,
             "jet_fuel_fulfillment": jet_fuel_fulfillment,
             "diesel_fulfillment": diesel_fulfillment,
             "aviation_jet_fulfillment": strategic_jet_fulfillment,

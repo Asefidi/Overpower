@@ -800,6 +800,24 @@ def get_scenario_presets() -> dict[str, ScenarioPreset]:
         ("EUCOM", "NORTHCOM"): {"latency_weeks": 3, "shipping_cost_per_bbl": 11.5, "capacity_multiplier": 0.70},
     }
 
+    south_china_sea_blockade_routes: dict[tuple[str, str], dict[str, float | int | bool]] = {}
+    for origin in NODE_IDS:
+        if origin == "CHINA":
+            continue
+        if origin == "RUSSIA":
+            south_china_sea_blockade_routes[(origin, "CHINA")] = {
+                "latency_weeks": 1,
+                "shipping_cost_per_bbl": 4.6,
+                "capacity_multiplier": 0.18,
+            }
+            continue
+        south_china_sea_blockade_routes[(origin, "CHINA")] = {
+            "latency_weeks": 5,
+            "shipping_cost_per_bbl": 22.0,
+            "capacity_multiplier": 0.02,
+            "blocked": True,
+        }
+
     return {
         "baseline": ScenarioPreset(
             name="Baseline",
@@ -917,6 +935,20 @@ def get_scenario_presets() -> dict[str, ScenarioPreset]:
             producer_supply_shocks={"NORTHCOM": 0.72},
             refinery_capacity_shocks={"NORTHCOM": 0.66},
             military_demand_shocks={"NORTHCOM": 0.10, "SOUTHCOM": 0.06},
+        ),
+        "south_china_sea_blockade": ScenarioPreset(
+            name="South China Sea Blockade",
+            description="A US-led maritime blockade closes seaborne crude and product inputs into CHINA while a limited Russia-to-China overland route remains available.",
+            operational_notes=(
+                "Trigger: blockade conditions deny modeled seaborne fuel inputs into CHINA without modeling tactical enforcement details.",
+                "Affected lanes/nodes: every non-Russian inbound route edge to CHINA is blocked; RUSSIA -> CHINA remains open as a capacity-limited pipeline proxy.",
+                "Supply/refinery shock: CHINA refinery throughput is capped by coastal import-terminal disruption and a narrower crude slate.",
+                "Market mechanism: Chinese households and oil-intensive sectors face lower fulfillment, higher product prices, and a nonlinear output hit as inventories run down.",
+            ),
+            route_overrides=south_china_sea_blockade_routes,
+            locality_fear_shocks={"CHINA": 0.72, "INDOPACOM": 0.22, "RUSSIA": 0.16, "CENTCOM": 0.10},
+            refinery_capacity_shocks={"CHINA": 0.58, "INDOPACOM": 0.92},
+            military_demand_shocks={"INDOPACOM": 0.22, "NORTHCOM": 0.08},
         ),
         "coordinated_mitigation": ScenarioPreset(
             name="Coordinated Mitigation",

@@ -5,7 +5,7 @@ This repository now includes a runnable MVP built for a 10-hour hackathon sprint
 
 - A deterministic weekly simulation engine in `src/overpower/`
 - A Streamlit dashboard in `app.py`
-- Scenario presets for Hormuz pressure, Russia disruption, Venezuela outage, Taiwan Strait surge, Red Sea diversion, NATO winter diesel crunch, Gulf Coast hurricane, and policy mitigation
+- Scenario presets fosr Hormuz pressure, Russia disruption, Venezuela outage, Taiwan Strait surge, Red Sea diversion, NATO winter diesel crunch, Gulf Coast hurricane, South China Sea blockade, and policy mitigation
 - Military strategy overlays for steady state, ground combat operations, air-maritime campaigns, distributed island defense, rapid deployment surges, and humanitarian stability operations
 - Route override controls, event logging, refinery rankings, shortage heatmaps, and a Strategic Readiness Index
 
