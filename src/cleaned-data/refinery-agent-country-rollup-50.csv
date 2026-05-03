@@ -1,0 +1,51 @@
+agent_country_key,representative_agent,representative_agent_key,bucket_type,bucket_basis_country,assigned_country,total_peak_capacity_bpd,approx_complexity_score,complexity_confidence,known_complexity_capacity_bpd,imputed_complexity_capacity_bpd,approx_gasoline_capacity_bpd,approx_diesel_capacity_bpd,approx_jet_capacity_bpd,source_site_count,source_entity_count,source_asset_country_count,top20_company_rank,entity_global_capacity_bpd,member_entities_preview
+misc-american-usa,misc-American,misc-american,misc_country,United States,United States,8833814.0,8.115,medium,8356055.0,477759.0,3050444.16,2388397.13,629389.88,88,52,1,,,Tesoro; Citgo/PDV; Koch; ACCESS INDUSTRIES; HOLLYFRONTIER CORP; PBF ENERGY CO; WRB REFINING LP; SUNOCO INC
+misc-indian-india,misc-Indian,misc-indian,misc_country,India,India,3235000.0,9.164,low,0.0,3235000.0,1223560.0,901760.0,248160.0,20,9,1,,,IOCL; Reliance; Bharat Petroleum Corporation; ONGC; Hindustan Petroleum Corporation; Essar; Chennai Petroleum Corporation; MRPL
+misc-korean-south-korea,misc-Korean,misc-korean,misc_country,Republic of Korea,Republic of Korea,2645000.0,11.419,low,0.0,2645000.0,1159500.0,781200.0,231900.0,5,5,1,,,SK Corp; LG-Caltex(Chevron) Yosu; S-Oil Ulsan; Hyundai; Hanwha
+misc-russian-russia,misc-Russian,misc-russian,misc_country,Russian Federation,Russian Federation,2582100.0,8.556,low,0.0,2582100.0,914802.0,703064.0,186895.0,12,9,2,,,Bashneft; Sibneft Omsk; Surgutneftegas Kirishi; TNK-BP Ryazan; Slavneft; Sibneft/Central Fuel Company; TNK-BP Orsk; TNK-BPL Saratov
+sinopec-china,Sinopec,sinopec,top20_company_country,China,China,2396000.0,7.989,low,0.0,2396000.0,861500.0,654400.0,175530.0,17,1,1,6,2396000.0,Sinopec
+valero-usa,Valero,valero,top20_company_country,United States,United States,2291000.0,9.337,medium,2291000.0,0.0,857630.0,638540.0,175780.0,12,1,1,3,2831000.0,Valero
+marathon-usa,Marathon,marathon,top20_company_country,United States,United States,2165500.0,9.375,medium,1925500.0,240000.0,838020.0,607255.0,169345.0,8,1,1,7,2165500.0,Marathon
+misc-canadian-canada,misc-Canadian,misc-canadian,misc_country,Canada,Canada,2057500.0,7.348,medium-low,110500.0,1947000.0,679780.0,551670.0,140730.0,17,10,2,,,Suncor; Imperial Oil; Syncrude; Irving; CNRL Horizon; North Atlantic; NOVA Chemicals (Canada); Nexen
+exxon-mobil-usa,Exxon Mobil,exxon-mobil,top20_company_country,United States,United States,1947100.0,9.368,medium,1947100.0,0.0,751690.0,542504.0,151506.0,6,1,1,1,6497100.0,Exxon Mobil
+petrobras-brazil,Petrobras,petrobras,top20_company_country,Brazil,Brazil,1946000.0,8.031,low,0.0,1946000.0,673820.0,526930.0,138250.0,11,1,1,9,2006000.0,Petrobras
+misc-italian-italy,misc-Italian,misc-italian,misc_country,Italy,Italy,1774000.0,7.130,low,0.0,1774000.0,569560.0,472980.0,118580.0,14,10,1,,,ENI; Saras; ISAB; SARPOM; ERG Raffinerie Mediterranee; Tamoil Cremona Oil; Anonima Petroli Italiana; Raffineria Di Milazzo
+conocophillips-usa,ConocoPhillips,conocophillips,top20_company_country,United States,United States,1724647.0,9.225,medium,1708647.0,16000.0,662363.98,483806.69,134173.29,10,1,1,8,2016647.0,ConocoPhillips
+exxon-mobil-japan,Exxon Mobil,exxon-mobil,top20_company_country,Japan,Japan,1558000.0,9.368,low,0.0,1558000.0,623200.0,436240.0,124640.0,5,1,1,1,6497100.0,Exxon Mobil
+misc-german-germany,misc-German,misc-german,misc_country,Germany,Germany,1511000.0,8.408,low,0.0,1511000.0,568640.0,417120.0,114920.0,9,8,1,,,Ruhr Oel (BP/PDVSA); Bayernoil Ingolstadt; Dow Chemical Buna; Louis Dreyfus Group; PCK Raffinerie GmbH; ExxonMobile Ingolstadt; Tamoil Holborn Hamburg; OMV Burghausen
+bp-usa,BP,bp,top20_company_country,United States,United States,1479780.0,9.482,medium-low,826000.0,653780.0,577752.0,411978.4,116022.4,6,1,1,4,2723780.0,BP
+saudi-aramco-saudi-arabia,Saudi Aramco,saudi-aramco,top20_company_country,Saudi Arabia,Saudi Arabia,1420000.0,9.511,low,0.0,1420000.0,564600.0,401700.0,113700.0,6,1,1,12,1420000.0,Saudi Aramco
+pemex-mexico,Pemex,pemex,top20_company_country,Mexico,Mexico,1370500.0,8.151,low,0.0,1370500.0,465970.0,370035.0,95935.0,6,1,1,13,1370500.0,Pemex
+pdvsa-venezuela,PDVSA,pdvsa,top20_company_country,Venezuela,Venezuela,1308000.0,9.512,low,0.0,1308000.0,514570.0,372210.0,104260.0,4,1,1,11,1628000.0,PDVSA
+misc-taiwanese-taiwan,misc-Taiwanese,misc-taiwanese,misc_country,Republic of China Taiwan,Republic of China Taiwan,1220000.0,10.053,low,0.0,1220000.0,510500.0,350600.0,102100.0,4,2,1,,,CPC; Formosa Mailiao
+motiva-usa,Motiva,motiva,top20_company_country,United States,United States,1140000.0,8.582,medium,1140000.0,0.0,387600.0,307800.0,79800.0,3,1,1,16,1140000.0,Motiva
+cnpc-petrochina-china,CNPC/PetroChina,cnpc-petrochina,top20_company_country,China,China,1124000.0,7.500,low,0.0,1124000.0,382160.0,303480.0,78680.0,9,1,1,14,1275700.0,CNPC/PetroChina
+total-france,Total,total,top20_company_country,France,France,1107000.0,8.310,low,0.0,1107000.0,376380.0,298890.0,77490.0,6,1,1,5,2533000.0,Total
+misc-japanese-japan,misc-Japanese,misc-japanese,misc_country,Japan,Japan,1069000.0,9.360,low,0.0,1069000.0,421600.0,298320.0,84520.0,5,5,1,,,Tonen Corp Kawasaki; Cosmo Oil Cosmo; Kyokuto Petroleum Ichihara; Showa Yokkaichi; Tohoku Oil Co
+yukos-russia,Yukos,yukos,top20_company_country,Russian Federation,Russian Federation,1065100.0,8.367,low,0.0,1065100.0,384526.0,291255.0,78289.0,6,1,1,18,1065100.0,Yukos
+pertamina-indonesia,Pertamina,pertamina,top20_company_country,Indonesia,Indonesia,1038200.0,7.806,low,0.0,1038200.0,349988.0,279814.0,72174.0,6,1,1,19,1038200.0,Pertamina
+chevron-usa,Chevron,chevron,top20_company_country,United States,United States,1020700.0,11.082,medium,1020700.0,0.0,436656.0,299012.0,88700.0,5,1,1,10,1644700.0,Chevron
+nprc-japan,NPRC,nprc,top20_company_country,Japan,Japan,996000.0,9.102,low,0.0,996000.0,378900.0,279900.0,77040.0,5,1,1,20,996000.0,NPRC
+misc-islamic-republic-of-iran-islamic-republic-of-iran,misc-Islamic Republic of Iran,misc-islamic-republic-of-iran,misc_country,Islamic Republic of Iran,Islamic Republic of Iran,927000.0,8.529,low,0.0,927000.0,334380.0,253090.0,68090.0,5,5,1,,,NIOC Abadan; NIOC Isfahan; NIOC Arak; NIOC Tabriz; NIOC Shiraz
+misc-kuwaiti-kuwait,misc-Kuwaiti,misc-kuwaiti,misc_country,Kuwait,Kuwait,831000.0,9.921,low,0.0,831000.0,342260.0,239130.0,68810.0,3,1,1,,,KNPC
+lukoil-russia,LUKOIL,lukoil,top20_company_country,Russian Federation,Russian Federation,792000.0,7.862,low,0.0,792000.0,264960.0,213120.0,54720.0,4,1,1,17,1070000.0,LUKOIL
+repsol-spain,Repsol,repsol,top20_company_country,Spain,Spain,740000.0,7.946,low,0.0,740000.0,264800.0,202000.0,54000.0,5,1,1,15,1162000.0,Repsol
+misc-egyptian-egypt,misc-Egyptian,misc-egyptian,misc_country,Egypt,Egypt,677000.0,6.198,low,0.0,677000.0,208460.0,178720.0,43770.0,9,7,1,,,Alexandria Petroleum Company; Cairo Petroleum Refining; MIDOR Alexandria; El-Nasr Petroleum Company; El Suez Refining; Assyout Petroleum Company; El Nasr Refining
+shell-germany,Shell,shell,top20_company_country,Germany,Germany,641000.0,8.532,low,0.0,641000.0,217940.0,173070.0,44870.0,4,1,1,2,3373500.0,Shell
+misc-emirati-uae,misc-Emirati,misc-emirati,misc_country,United Arab Emirates,United Arab Emirates,631300.0,8.116,low,0.0,631300.0,217564.0,170938.0,44678.0,5,5,1,,,Al-Ruwais Refinery; ENOC Jebel Ali; ADNOC; Sharjah Oil; Metro Oil Fujairah
+misc-ukrainian-ukraine,misc-Ukrainian,misc-ukrainian,misc_country,Ukraine,Ukraine,615000.0,7.220,low,0.0,615000.0,195300.0,162600.0,40750.0,5,5,1,,,TNK-BP LINOS Lisichansk; Ukrtatnafta Kremenchuk; Ukrtransneft Drogobych; Ukrtransneft Neftekhimik Prikarpatya; Allianz Oil Kherson
+exxon-mobil-singapore,Exxon Mobil,exxon-mobil,top20_company_country,Singapore,Singapore,605000.0,9.368,low,0.0,605000.0,242000.0,169400.0,48400.0,1,1,1,1,6497100.0,Exxon Mobil
+misc-iraqi-iraq,misc-Iraqi,misc-iraqi,misc_country,Iraq,Iraq,594000.0,6.606,low,0.0,594000.0,192600.0,158040.0,40020.0,8,8,1,,,INOC Baiji North; INOC Baiji Salahedden; INOC Basrah; INOC Daurah; INOC Samawah; INOC Kirkuk; INOC Haditha; INOC Khanaqin/Alwand
+misc-turkish-turkey,misc-Turkish,misc-turkish,misc_country,Turkey,Turkey,548000.0,8.046,low,0.0,548000.0,183680.0,147300.0,37920.0,4,4,1,,,Tupras Izmit; Tupras Aliaga; Tupras Central Anatolian; Tupras Batman
+misc-algerian-algeria,misc-Algerian,misc-algerian,misc_country,Algeria,Algeria,475000.0,7.417,low,0.0,475000.0,150040.0,125950.0,31340.0,5,4,1,,,Sonatrach; Sonatrach Algiers; Sonatrach Hassi Messaoud; Refining Company of
+shell-singapore,Shell,shell,top20_company_country,Singapore,Singapore,458000.0,8.532,low,0.0,458000.0,155720.0,123660.0,32060.0,1,1,1,2,3373500.0,Shell
+exxon-mobil-netherlands,Exxon Mobil,exxon-mobil,top20_company_country,Netherlands,Netherlands,455000.0,9.368,low,0.0,455000.0,182000.0,127400.0,36400.0,2,1,1,1,6497100.0,Exxon Mobil
+misc-nigerian-nigeria,misc-Nigerian,misc-nigerian,misc_country,Nigeria,Nigeria,445000.0,7.708,low,0.0,445000.0,151300.0,120150.0,31150.0,3,3,1,,,PHRC Port Harcourt; WRPG Warri; KRPC Kaduna
+shell-usa,Shell,shell,top20_company_country,United States,United States,444500.0,8.532,medium,444500.0,0.0,154290.0,121430.0,31905.0,4,1,1,2,3373500.0,Shell
+misc-azerbaijani-azerbaijan,misc-Azerbaijani,misc-azerbaijani,misc_country,Azerbaijan,Azerbaijan,439000.0,8.500,low,0.0,439000.0,149260.0,118530.0,30730.0,2,2,1,,,SOCAR Azerineftyag; SOCAR Haydar Aliev
+misc-saudi-saudi-arabia,misc-Saudi,misc-saudi,misc_country,Saudi Arabia,Saudi Arabia,430000.0,10.581,low,0.0,430000.0,188400.0,127800.0,37800.0,2,2,1,,,Rabigh Saudi Aramco; AOC Khafji
+misc-spanish-spain,misc-Spanish,misc-spanish,misc_country,Spain,Spain,430000.0,8.023,low,0.0,430000.0,155200.0,117600.0,31600.0,3,3,1,,,CEPSA Gibraltar; CEPSA Palos de; CEPSA Tenerife
+shell-canada,Shell,shell,top20_company_country,Canada,Canada,430000.0,8.532,low,0.0,430000.0,146200.0,116100.0,30100.0,3,1,1,2,3373500.0,Shell
+misc-kazakh-kazakhstan,misc-Kazakh,misc-kazakh,misc_country,Kazakhstan,Kazakhstan,427066.0,7.000,low,0.0,427066.0,145202.44,115307.82,29894.62,3,3,1,,,Kazmunaigaz Pavlodar; Kazmunaigaz Shymkent; Kazmunaigaz Atyrau
+bp-uk,BP,bp,top20_company_country,United Kingdom,United Kingdom,413000.0,9.482,low,0.0,413000.0,165200.0,115640.0,33040.0,2,1,1,4,2723780.0,BP
+exxon-mobil-france,Exxon Mobil,exxon-mobil,top20_company_country,France,France,410000.0,9.368,low,0.0,410000.0,164000.0,114800.0,32800.0,2,1,1,1,6497100.0,Exxon Mobil
