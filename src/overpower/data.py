@@ -17,9 +17,11 @@ from .sim import (
     PolicyControls,
     RefineryAgent,
     RouteState,
+    MilitaryStrategyPreset,
     ScenarioPreset,
     SimulationConfig,
     WorldState,
+    default_military_strategy,
     step_world,
 )
 
@@ -168,11 +170,14 @@ HOUSEHOLD_PRICE_PRIORITIES = {
 # Public OUSD operational-energy data gives a roughly 73M bbl/year DoD fuel basis;
 # DLA Energy public pages identify military jet and diesel fuels as core products.
 PUBLIC_DOD_OPERATIONAL_FUEL_BBL_YEAR = 73_000_000.0
-DOD_OVERSEAS_PURCHASE_SHARE = 0.48
 
 MILITARY_BUYER_LOCALITY_WEIGHTS = {
-    "NORTHCOM": 1.0 - DOD_OVERSEAS_PURCHASE_SHARE,
-    "INDOPACOM": DOD_OVERSEAS_PURCHASE_SHARE,
+    "NORTHCOM": 0.42,
+    "EUCOM": 0.16,
+    "CENTCOM": 0.10,
+    "INDOPACOM": 0.24,
+    "AFRICOM": 0.04,
+    "SOUTHCOM": 0.04,
 }
 
 MILITARY_OPERATIONAL_PRODUCT_MIX = {
@@ -189,7 +194,11 @@ MILITARY_PRICE_PRIORITIES = {
 
 MILITARY_BUYER_NAMES = {
     "NORTHCOM": "NORTHCOM Military Fuel Buyer",
+    "EUCOM": "EUCOM Military Fuel Buyer",
+    "CENTCOM": "CENTCOM Military Fuel Buyer",
     "INDOPACOM": "INDOPACOM Military Fuel Buyer",
+    "AFRICOM": "AFRICOM Military Fuel Buyer",
+    "SOUTHCOM": "SOUTHCOM Military Fuel Buyer",
 }
 
 EXTRACTION_COST_BY_LOCALITY = {
@@ -744,6 +753,53 @@ def get_scenario_presets() -> dict[str, ScenarioPreset]:
                 "blocked": destination in {"EUCOM", "NORTHCOM", "INDOPACOM", "CHINA"},
             }
 
+    taiwan_strait_routes: dict[tuple[str, str], dict[str, float | int | bool]] = {}
+    for key in (("CHINA", "INDOPACOM"), ("INDOPACOM", "CHINA")):
+        taiwan_strait_routes[key] = {
+            "latency_weeks": 3,
+            "shipping_cost_per_bbl": 18.0,
+            "capacity_multiplier": 0.25,
+        }
+    for origin in ("CHINA", "INDOPACOM"):
+        for destination in ("NORTHCOM", "CENTCOM", "AFRICOM", "SOUTHCOM"):
+            if origin == destination:
+                continue
+            taiwan_strait_routes[(origin, destination)] = {
+                "latency_weeks": 3,
+                "shipping_cost_per_bbl": 12.0,
+                "capacity_multiplier": 0.55,
+            }
+
+    red_sea_routes: dict[tuple[str, str], dict[str, float | int | bool]] = {}
+    for origin, destination in (
+        ("CENTCOM", "EUCOM"),
+        ("EUCOM", "CENTCOM"),
+        ("CENTCOM", "AFRICOM"),
+        ("AFRICOM", "CENTCOM"),
+        ("AFRICOM", "EUCOM"),
+        ("EUCOM", "AFRICOM"),
+    ):
+        red_sea_routes[(origin, destination)] = {
+            "latency_weeks": 3,
+            "shipping_cost_per_bbl": 13.5,
+            "capacity_multiplier": 0.45,
+        }
+
+    nato_winter_routes = {
+        ("NORTHCOM", "EUCOM"): {"latency_weeks": 3, "shipping_cost_per_bbl": 10.5, "capacity_multiplier": 0.70},
+        ("CENTCOM", "EUCOM"): {"latency_weeks": 3, "shipping_cost_per_bbl": 11.0, "capacity_multiplier": 0.72},
+        ("AFRICOM", "EUCOM"): {"latency_weeks": 2, "shipping_cost_per_bbl": 8.5, "capacity_multiplier": 0.78},
+        ("EUCOM", "NORTHCOM"): {"latency_weeks": 3, "shipping_cost_per_bbl": 10.5, "capacity_multiplier": 0.78},
+    }
+
+    gulf_coast_hurricane_routes = {
+        ("NORTHCOM", "EUCOM"): {"latency_weeks": 3, "shipping_cost_per_bbl": 12.5, "capacity_multiplier": 0.45},
+        ("NORTHCOM", "SOUTHCOM"): {"latency_weeks": 3, "shipping_cost_per_bbl": 11.0, "capacity_multiplier": 0.50},
+        ("NORTHCOM", "CENTCOM"): {"latency_weeks": 3, "shipping_cost_per_bbl": 12.0, "capacity_multiplier": 0.50},
+        ("SOUTHCOM", "NORTHCOM"): {"latency_weeks": 3, "shipping_cost_per_bbl": 10.5, "capacity_multiplier": 0.70},
+        ("EUCOM", "NORTHCOM"): {"latency_weeks": 3, "shipping_cost_per_bbl": 11.5, "capacity_multiplier": 0.70},
+    }
+
     return {
         "baseline": ScenarioPreset(
             name="Baseline",
@@ -751,7 +807,7 @@ def get_scenario_presets() -> dict[str, ScenarioPreset]:
             operational_notes=(
                 "Trigger: no new disruption beyond standing embargoes against Iranian, Russian, and Venezuelan barrels.",
                 "Affected lanes/nodes: IRAN and RUSSIA have no route edge to EUCOM or NORTHCOM in either direction; Venezuelan crude is embargoed from EUCOM/NORTHCOM at the country layer.",
-                "Market mechanism: the default 1.5x shipping environment raises landed costs while local inventories keep fear near steady state.",
+                "Market mechanism: the neutral scenario shipping layer raises landed costs while local inventories keep fear near steady state.",
             ),
         ),
         "hormuz_squeeze": ScenarioPreset(
@@ -804,6 +860,64 @@ def get_scenario_presets() -> dict[str, ScenarioPreset]:
             refinery_country_shocks={"Venezuela": 0.28},
             military_demand_shocks={"NORTHCOM": 0.05},
         ),
+        "taiwan_strait_surge": ScenarioPreset(
+            name="Taiwan Strait Surge",
+            description="A Western Pacific crisis raises CHINA/INDOPACOM route friction while forward forces compete for jet and diesel cover.",
+            operational_notes=(
+                "Trigger: Taiwan Strait pressure slows cross-Pacific and intra-theater cargo flows.",
+                "Affected lanes/nodes: CHINA and INDOPACOM directed lanes operate with reduced capacity, longer latency, and elevated shipping costs.",
+                "Supply/refinery shock: CHINA and INDOPACOM refineries lose throughput as replacement barrels arrive late.",
+                "Market mechanism: INDOPACOM military demand rises into a constrained local product market.",
+            ),
+            route_overrides=taiwan_strait_routes,
+            locality_fear_shocks={"INDOPACOM": 0.48, "CHINA": 0.46, "NORTHCOM": 0.12, "CENTCOM": 0.10},
+            refinery_capacity_shocks={"INDOPACOM": 0.80, "CHINA": 0.82},
+            military_demand_shocks={"INDOPACOM": 0.30, "NORTHCOM": 0.08, "CENTCOM": 0.06},
+        ),
+        "red_sea_diversion": ScenarioPreset(
+            name="Red Sea Diversion",
+            description="A Red Sea maritime disruption diverts CENTCOM/EUCOM/AFRICOM flows onto slower and costlier routes.",
+            operational_notes=(
+                "Trigger: maritime threat activity diverts cargo around the Red Sea corridor.",
+                "Affected lanes/nodes: CENTCOM, EUCOM, and AFRICOM routes take higher cost, longer latency, and partial capacity loss.",
+                "Supply/refinery shock: CENTCOM and AFRICOM refining throughput is trimmed by disrupted feedstock timing.",
+                "Market mechanism: EUCOM and CENTCOM bid for replacement diesel and jet fuel while inventories absorb the first shock.",
+            ),
+            route_overrides=red_sea_routes,
+            locality_fear_shocks={"CENTCOM": 0.32, "EUCOM": 0.26, "AFRICOM": 0.24},
+            refinery_capacity_shocks={"CENTCOM": 0.88, "AFRICOM": 0.90},
+            military_demand_shocks={"CENTCOM": 0.14, "EUCOM": 0.08, "AFRICOM": 0.08},
+        ),
+        "nato_winter_diesel_crunch": ScenarioPreset(
+            name="NATO Winter Diesel Crunch",
+            description="A cold-weather EUCOM diesel squeeze combines Russian supply pressure with slower Atlantic replacement flows.",
+            operational_notes=(
+                "Trigger: winter heating and mobility needs collide with renewed Russian supply pressure.",
+                "Affected lanes/nodes: EUCOM replacement lanes from NORTHCOM, CENTCOM, and AFRICOM get more expensive and slower.",
+                "Supply/refinery shock: Russian crude supply and refinery utilization fall while EUCOM throughput is constrained.",
+                "Market mechanism: EUCOM diesel bids crowd into the strategic market and raise local fear before stocks stabilize.",
+            ),
+            route_overrides=nato_winter_routes,
+            locality_fear_shocks={"EUCOM": 0.44, "RUSSIA": 0.36, "NORTHCOM": 0.08},
+            producer_supply_shocks={"RUSSIA": 0.62},
+            refinery_capacity_shocks={"RUSSIA": 0.76, "EUCOM": 0.88},
+            military_demand_shocks={"EUCOM": 0.16, "NORTHCOM": 0.06},
+        ),
+        "gulf_coast_hurricane": ScenarioPreset(
+            name="Gulf Coast Hurricane",
+            description="A NORTHCOM Gulf Coast outage removes crude and refinery capacity while allies seek replacement products.",
+            operational_notes=(
+                "Trigger: a major Gulf Coast storm cuts NORTHCOM production, refining, and export availability.",
+                "Affected lanes/nodes: NORTHCOM outbound lanes to EUCOM, SOUTHCOM, and CENTCOM lose capacity with higher shipping costs.",
+                "Supply/refinery shock: NORTHCOM crude supply and refinery throughput fall materially for the modeled week.",
+                "Market mechanism: SOUTHCOM and EUCOM compete for replacement flows while NORTHCOM inventories prioritize local demand.",
+            ),
+            route_overrides=gulf_coast_hurricane_routes,
+            locality_fear_shocks={"NORTHCOM": 0.34, "SOUTHCOM": 0.16, "EUCOM": 0.12},
+            producer_supply_shocks={"NORTHCOM": 0.72},
+            refinery_capacity_shocks={"NORTHCOM": 0.66},
+            military_demand_shocks={"NORTHCOM": 0.10, "SOUTHCOM": 0.06},
+        ),
         "coordinated_mitigation": ScenarioPreset(
             name="Coordinated Mitigation",
             description="A policy-forward response layer that adds reserve release and refinery support.",
@@ -823,8 +937,85 @@ def get_scenario_presets() -> dict[str, ScenarioPreset]:
     }
 
 
-def default_simulation_config(selected_scenario: str = "baseline") -> SimulationConfig:
-    return SimulationConfig(selected_scenario=selected_scenario)
+def get_military_strategy_presets() -> dict[str, MilitaryStrategyPreset]:
+    return {
+        "steady_state": default_military_strategy(),
+        "ground_combat_operations": MilitaryStrategyPreset(
+            name="Ground Combat Operations",
+            description="Diesel-forward posture for armored movement, sustainment convoys, engineering support, and distributed ground logistics.",
+            operational_notes=(
+                "Posture: ground maneuver and sustainment units raise diesel draw across forward command nodes.",
+                "Demand effect: military diesel demand rises materially, with smaller jet demand for theater lift and ISR support.",
+                "Readiness effect: diesel fulfillment carries the highest weight because ground mobility is the limiting factor.",
+            ),
+            product_demand_multipliers={"gasoline": 1.0, "diesel": 1.32, "jet": 1.08},
+            locality_demand_shocks={"EUCOM": 0.10, "CENTCOM": 0.16, "INDOPACOM": 0.08},
+            product_bid_multipliers={"gasoline": 1.0, "diesel": 1.18, "jet": 1.04},
+            readiness_product_weights={"jet": 0.35, "diesel": 0.65},
+        ),
+        "air_maritime_campaign": MilitaryStrategyPreset(
+            name="Air-Maritime Campaign",
+            description="Jet-heavy posture for sustained sorties, naval aviation, long-range strike, and theater air mobility.",
+            operational_notes=(
+                "Posture: air and maritime activity raises jet fuel requirements ahead of diesel sustainment needs.",
+                "Demand effect: military jet demand surges, especially in INDOPACOM and forward staging nodes.",
+                "Readiness effect: jet fulfillment dominates the readiness score because sortie generation is the pacing demand.",
+            ),
+            product_demand_multipliers={"gasoline": 1.0, "diesel": 1.12, "jet": 1.36},
+            locality_demand_shocks={"INDOPACOM": 0.18, "CENTCOM": 0.08, "NORTHCOM": 0.06},
+            product_bid_multipliers={"gasoline": 1.0, "diesel": 1.06, "jet": 1.20},
+            readiness_product_weights={"jet": 0.75, "diesel": 0.25},
+        ),
+        "distributed_island_defense": MilitaryStrategyPreset(
+            name="Distributed Island Defense",
+            description="INDOPACOM-focused posture for dispersed bases, contested replenishment, and small-node fuel resilience.",
+            operational_notes=(
+                "Posture: dispersed Pacific nodes increase both diesel generation demand and aviation fuel demand.",
+                "Demand effect: INDOPACOM military buyers pull harder on diesel and jet fuel at the same time.",
+                "Readiness effect: jet remains slightly dominant, but diesel resilience matters more than in steady state.",
+            ),
+            product_demand_multipliers={"gasoline": 1.0, "diesel": 1.24, "jet": 1.20},
+            locality_demand_shocks={"INDOPACOM": 0.32, "NORTHCOM": 0.08},
+            product_bid_multipliers={"gasoline": 1.0, "diesel": 1.12, "jet": 1.12},
+            readiness_product_weights={"jet": 0.58, "diesel": 0.42},
+        ),
+        "rapid_deployment_surge": MilitaryStrategyPreset(
+            name="Rapid Deployment Surge",
+            description="Staging posture that raises NORTHCOM deployment demand plus forward-theater jet and diesel requirements.",
+            operational_notes=(
+                "Posture: strategic lift, reception, staging, onward movement, and integration increase near-term fuel draw.",
+                "Demand effect: NORTHCOM demand spikes first, with follow-on demand in EUCOM, INDOPACOM, and CENTCOM.",
+                "Readiness effect: jet fuel keeps a slight edge while diesel demand supports onward movement and sustainment.",
+            ),
+            product_demand_multipliers={"gasoline": 1.0, "diesel": 1.22, "jet": 1.28},
+            locality_demand_shocks={"NORTHCOM": 0.24, "EUCOM": 0.12, "INDOPACOM": 0.12, "CENTCOM": 0.08},
+            product_bid_multipliers={"gasoline": 1.0, "diesel": 1.15, "jet": 1.15},
+            readiness_product_weights={"jet": 0.62, "diesel": 0.38},
+        ),
+        "humanitarian_stability_operations": MilitaryStrategyPreset(
+            name="Humanitarian Stability Operations",
+            description="Diesel-forward posture for port relief, generator power, water distribution, and protected surface logistics.",
+            operational_notes=(
+                "Posture: relief and stability missions push diesel demand toward AFRICOM and SOUTHCOM.",
+                "Demand effect: diesel demand rises for generators, ground transport, and port operations while jet demand grows modestly.",
+                "Readiness effect: diesel fulfillment receives the dominant weight because surface logistics and power are the key constraints.",
+            ),
+            product_demand_multipliers={"gasoline": 1.0, "diesel": 1.26, "jet": 1.04},
+            locality_demand_shocks={"AFRICOM": 0.26, "SOUTHCOM": 0.18, "CENTCOM": 0.08},
+            product_bid_multipliers={"gasoline": 1.0, "diesel": 1.10, "jet": 1.02},
+            readiness_product_weights={"jet": 0.30, "diesel": 0.70},
+        ),
+    }
+
+
+def default_simulation_config(
+    selected_scenario: str = "baseline",
+    selected_military_strategy: str = "steady_state",
+) -> SimulationConfig:
+    return SimulationConfig(
+        selected_scenario=selected_scenario,
+        selected_military_strategy=selected_military_strategy,
+    )
 
 
 def _baseline_warm_start_config(config: SimulationConfig, warm_start_weeks: int) -> SimulationConfig:
@@ -832,6 +1023,7 @@ def _baseline_warm_start_config(config: SimulationConfig, warm_start_weeks: int)
         seed=config.seed,
         start_week=config.start_week - warm_start_weeks,
         selected_scenario="baseline",
+        selected_military_strategy="steady_state",
         route_overrides=dict(config.route_overrides),
         policy_controls=PolicyControls(
             shipping_cost_multiplier=config.policy_controls.shipping_cost_multiplier,

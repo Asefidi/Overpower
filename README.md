@@ -5,10 +5,11 @@ This repository now includes a runnable MVP built for a 10-hour hackathon sprint
 
 - A deterministic weekly simulation engine in `src/overpower/`
 - A Streamlit dashboard in `app.py`
-- Scenario presets for Hormuz pressure, CIS disruption, Venezuela outage, and policy mitigation
+- Scenario presets for Hormuz pressure, Russia disruption, Venezuela outage, Taiwan Strait surge, Red Sea diversion, NATO winter diesel crunch, Gulf Coast hurricane, and policy mitigation
+- Military strategy overlays for steady state, ground combat operations, air-maritime campaigns, distributed island defense, rapid deployment surges, and humanitarian stability operations
 - Route override controls, event logging, refinery rankings, shortage heatmaps, and a Strategic Readiness Index
 
-The MVP uses 50 crude producer agents, 50 refinery agents, 45 sector demand agents, and 36 household demand agents across 9 command-aligned localities.
+The MVP uses 50 crude producer agents, 50 refinery agents, 45 sector demand agents, 36 household demand agents, and 6 dedicated military fuel buyers across 9 command-aligned localities.
 
 ## Quick Start
 1. Install dependencies:
@@ -27,11 +28,11 @@ The MVP uses 50 crude producer agents, 50 refinery agents, 45 sector demand agen
 If `plotly` is not installed yet, the app still runs with Streamlit-native charts.
 
 ## 60-Second Demo Flow
-1. Start in `Baseline` and click `Run 4 Weeks`.
-2. Note the `Strategic Readiness`, `Global Shortage`, and `Avg Crude Price` cards.
-3. Switch to `Hormuz Squeeze`, hit `Reset World`, then `Run 4 Weeks`.
-4. Watch blocked lanes on the route graph, rising crude prices, and the event log.
-5. Add a reserve release and refinery subsidy, then run 4 more weeks to compare mitigation outcomes.
+1. Start in `Baseline` with `Steady State` strategy and click `Run 4 Weeks`.
+2. Note the military jet/diesel fulfillment, `Global Shortage`, and `Avg Crude Price` cards.
+3. Switch to `Taiwan Strait Surge` plus `Air-Maritime Campaign`, hit `Reset`, then `Run 4 Weeks`.
+4. Watch pressured Pacific lanes on the route graph, rising crude prices, and the event log.
+5. Add a reserve release, refinery subsidy, or military priority overlay, then run 4 more weeks to compare mitigation outcomes.
 
 ## MVP Design Notes
 - Canonical nodes come from `src/raw-input-data/core-data.csv`.
@@ -39,7 +40,8 @@ If `plotly` is not installed yet, the app still runs with Streamlit-native chart
 - Governments and capital allocators are represented as policy controls, not autonomous agents.
 - Crude shipments respect route latency and queue into future weeks.
 - Product allocation clears within the current step, with route blockades and shipping costs still affecting who gets served.
-- The readiness metric is weighted toward jet and diesel fulfillment in operationally important localities.
+- Scenarios model external supply-chain shocks; military strategy overlays model operational posture by changing military demand, bids, and jet/diesel readiness weights.
+- The readiness metric is weighted toward military jet and diesel fulfillment, with the selected strategy deciding the jet/diesel balance.
 
 ## I. Executive Summary
 America's national energy security is currently modeled using 20th-century econometric tools that prioritize smoothed averages of rational homogenous agents over the gritty complex and chaotic reality of supply chains. 

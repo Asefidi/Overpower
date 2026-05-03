@@ -47,6 +47,12 @@ give each nation 5 stochastic demand functions representing five industrial sect
 other (construction, transportation, mining, etc)
 assign each sector its own MWTP curve, create a heuristic for estimating it per region
 create 4 household functions per region representing each income quartile, base their MWTP on GDP per capita adjusted for GINI
+create dedicated military fuel buyers in NORTHCOM, EUCOM, CENTCOM, INDOPACOM, AFRICOM, and SOUTHCOM using the public 73M bbl/year DoD operational fuel basis. These buyers compete for diesel and jet fuel with higher MWTP than civilian sectors.
+
+## scenario and strategy overlays
+Scenarios represent the external shock to the fuel system: route disruption, supply loss, refinery outage, regional fear, and policy defaults. Current presets cover Baseline, Hormuz Squeeze, Russia Disruption, Venezuela Outage, Taiwan Strait Surge, Red Sea Diversion, NATO Winter Diesel Crunch, Gulf Coast Hurricane, and Coordinated Mitigation.
+
+Military strategies represent the operational posture layered on top of any scenario. They do not model tactics; they change military fuel demand, bid urgency, and the readiness weighting between jet and diesel fulfillment. Current presets cover Steady State, Ground Combat Operations, Air-Maritime Campaign, Distributed Island Defense, Rapid Deployment Surge, and Humanitarian Stability Operations.
 
 use @cleaned-data to create the crude and refinery agents
 use GDP data 
@@ -54,6 +60,7 @@ use GDP data
 ## not modeled:
 currency dynamics, inflationary and recessionary gaps. 
 disregard all refining output except gasoline, jet fuel, diesel.
+tactical combat outcomes, attrition, targeting, or weapons effects.
 
 
 ## Edge Schema
@@ -65,4 +72,4 @@ Each transit edge is a crude route with latency based on time to transport and t
 ## `step()` Pipeline
 each step in the model should represent a week of activity, and be executable by click of button on the interface managing the agent behaviours in that given step.
 
-
+At each step, the selected scenario and selected military strategy are resolved separately. Scenario shocks affect supply, refining, fear, route capacity, latency, and shipping cost. Strategy overlays affect only military demand, military bids, and jet/diesel readiness weights, allowing users to run clean combinations such as `Taiwan Strait Surge` plus `Air-Maritime Campaign` or `Baseline` plus `Ground Combat Operations`.

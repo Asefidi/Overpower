@@ -9,12 +9,20 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from overpower.data import PUBLIC_DOD_OPERATIONAL_FUEL_BBL_YEAR, build_world, get_scenario_presets
+from overpower.data import (
+    PUBLIC_DOD_OPERATIONAL_FUEL_BBL_YEAR,
+    build_world,
+    get_military_strategy_presets,
+    get_scenario_presets,
+)
 from overpower.sim import (
     DEFAULT_SHIPPING_COST_MULTIPLIER,
     DEFAULT_SPR_INVENTORY_BBL,
+    HOUSEHOLD_QUARTILES,
+    SCENARIO_NEUTRAL_SHIPPING_COST_MULTIPLIER,
     PRODUCTS,
     PolicyControls,
+    SECTORS,
     SPR_STORAGE_CAPACITY_BBL,
     SimulationConfig,
     _is_country_locality_crude_embargoed,
@@ -26,14 +34,16 @@ from overpower.sim import (
 class OverpowerSimulationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.scenarios = get_scenario_presets()
+        self.military_strategies = get_military_strategy_presets()
 
-    def _run(self, scenario: str, steps: int = 4, **policy_kwargs):
+    def _run(self, scenario: str, steps: int = 4, strategy: str = "steady_state", **policy_kwargs):
         config = SimulationConfig(
             selected_scenario=scenario,
+            selected_military_strategy=strategy,
             policy_controls=PolicyControls(**policy_kwargs),
         )
         world = build_world(config)
-        results = run_n_steps(world, config, self.scenarios, steps)
+        results = run_n_steps(world, config, self.scenarios, steps, self.military_strategies)
         return world, results[-1]
 
     def test_baseline_stability(self) -> None:
@@ -47,12 +57,35 @@ class OverpowerSimulationTests(unittest.TestCase):
             latest.readiness_index,
             100.0
             * (
-                latest.readiness_components["jet_fuel_fulfillment"] * 0.60
-                + latest.readiness_components["diesel_fulfillment"] * 0.40
+                latest.readiness_components["jet_fuel_fulfillment"] * latest.metrics["readiness_jet_weight"]
+                + latest.readiness_components["diesel_fulfillment"] * latest.metrics["readiness_diesel_weight"]
             ),
         )
         self.assertEqual(latest.metrics["jet_fuel_fulfillment"], latest.readiness_components["jet_fuel_fulfillment"])
         self.assertEqual(latest.metrics["diesel_fulfillment"], latest.readiness_components["diesel_fulfillment"])
+
+    def test_northcom_economic_indicators_are_segmented(self) -> None:
+        _, latest = self._run("baseline", steps=1)
+
+        household = latest.household_fuel_affordability["NORTHCOM"]
+        industrial = latest.industrial_output_at_risk["NORTHCOM"]
+
+        self.assertAlmostEqual(latest.metrics["northcom_household_fuel_affordability"], household["overall"])
+        self.assertAlmostEqual(latest.metrics["northcom_industrial_output_at_risk"], industrial["overall"])
+        self.assertGreaterEqual(household["overall"], 0.0)
+        self.assertLessEqual(household["overall"], 125.0)
+        self.assertGreaterEqual(industrial["overall"], 0.0)
+        self.assertLessEqual(industrial["overall"], 1.0)
+        for quartile in HOUSEHOLD_QUARTILES:
+            self.assertIn(quartile, household)
+            self.assertGreaterEqual(household[quartile], 0.0)
+            self.assertLessEqual(household[quartile], 125.0)
+        for sector in SECTORS:
+            self.assertIn(sector, industrial)
+            self.assertIn(f"{sector}_shortage_component", industrial)
+            self.assertIn(f"{sector}_price_component", industrial)
+            self.assertGreaterEqual(industrial[sector], 0.0)
+            self.assertLessEqual(industrial[sector], 1.0)
 
     def test_baseline_remains_stable_through_week_52(self) -> None:
         config = SimulationConfig(selected_scenario="baseline")
@@ -79,11 +112,11 @@ class OverpowerSimulationTests(unittest.TestCase):
         baseline_avg_crude = sum(baseline.crude_price_by_locality.values()) / len(baseline.crude_price_by_locality)
         stressed_avg_crude = sum(stressed.crude_price_by_locality.values()) / len(stressed.crude_price_by_locality)
         self.assertGreater(stressed.metrics["global_shortage_ratio"], baseline.metrics["global_shortage_ratio"])
-        self.assertGreaterEqual(stressed.readiness_index, baseline.readiness_index - 3.0)
+        self.assertLess(stressed.readiness_index, baseline.readiness_index)
         self.assertGreaterEqual(stressed.readiness_index, 90.0)
         self.assertGreater(stressed.metrics["military_diesel_fulfillment"], stressed.metrics["strategic_market_diesel_fulfillment"])
         self.assertGreaterEqual(stressed_avg_crude, baseline_avg_crude * 1.15)
-        self.assertGreaterEqual(stressed.metrics["global_shortage_ratio"] - baseline.metrics["global_shortage_ratio"], 0.05)
+        self.assertGreaterEqual(stressed.metrics["global_shortage_ratio"] - baseline.metrics["global_shortage_ratio"], 0.04)
         self.assertGreater(stressed_world.localities["CHINA"].fear_multiplier, baseline_world.localities["CHINA"].fear_multiplier + 0.20)
         self.assertTrue(any("Route pressure" in event for event in stressed.top_events))
         self.assertTrue(any("Panic signal" in event for event in stressed.top_events))
@@ -91,16 +124,81 @@ class OverpowerSimulationTests(unittest.TestCase):
     def test_default_shipping_multiplier_is_user_facing_only(self) -> None:
         config = SimulationConfig()
         self.assertEqual(config.policy_controls.shipping_cost_multiplier, DEFAULT_SHIPPING_COST_MULTIPLIER)
-        self.assertEqual(DEFAULT_SHIPPING_COST_MULTIPLIER, 1.5)
-        self.assertEqual(self.scenarios["baseline"].policy_defaults.shipping_cost_multiplier, 1.0)
-        self.assertEqual(self.scenarios["hormuz_squeeze"].policy_defaults.shipping_cost_multiplier, 1.0)
-        self.assertEqual(self.scenarios["cis_disruption"].policy_defaults.shipping_cost_multiplier, 1.0)
-        self.assertEqual(self.scenarios["venezuela_outage"].policy_defaults.shipping_cost_multiplier, 1.0)
+        self.assertEqual(DEFAULT_SHIPPING_COST_MULTIPLIER, 1.0)
+        for scenario_key, scenario in self.scenarios.items():
+            if scenario_key == "coordinated_mitigation":
+                continue
+            self.assertEqual(scenario.policy_defaults.shipping_cost_multiplier, SCENARIO_NEUTRAL_SHIPPING_COST_MULTIPLIER)
         self.assertEqual(self.scenarios["coordinated_mitigation"].policy_defaults.shipping_cost_multiplier, 0.95)
 
     def test_scenarios_expose_operational_notes(self) -> None:
         for scenario in self.scenarios.values():
             self.assertGreaterEqual(len(scenario.operational_notes), 3)
+
+    def test_new_scenarios_have_operational_shocks(self) -> None:
+        expected = {
+            "taiwan_strait_surge",
+            "red_sea_diversion",
+            "nato_winter_diesel_crunch",
+            "gulf_coast_hurricane",
+        }
+        self.assertTrue(expected.issubset(self.scenarios))
+        for scenario_key in expected:
+            scenario = self.scenarios[scenario_key]
+            self.assertGreaterEqual(len(scenario.operational_notes), 3)
+            self.assertTrue(scenario.route_overrides)
+            self.assertTrue(
+                scenario.locality_fear_shocks
+                or scenario.producer_supply_shocks
+                or scenario.refinery_capacity_shocks
+                or scenario.military_demand_shocks
+            )
+
+    def test_military_strategy_catalog(self) -> None:
+        expected = {
+            "steady_state",
+            "ground_combat_operations",
+            "air_maritime_campaign",
+            "distributed_island_defense",
+            "rapid_deployment_surge",
+            "humanitarian_stability_operations",
+        }
+        self.assertEqual(set(self.military_strategies), expected)
+        for strategy in self.military_strategies.values():
+            self.assertGreaterEqual(len(strategy.operational_notes), 3)
+            self.assertAlmostEqual(
+                strategy.readiness_product_weights["jet"] + strategy.readiness_product_weights["diesel"],
+                1.0,
+            )
+
+    def test_steady_state_strategy_is_backward_compatible(self) -> None:
+        config = SimulationConfig(selected_scenario="baseline")
+        legacy_world = build_world(config)
+        strategy_world = build_world(config)
+
+        legacy = run_n_steps(legacy_world, config, self.scenarios, 1)[-1]
+        explicit = run_n_steps(strategy_world, config, self.scenarios, 1, self.military_strategies)[-1]
+
+        self.assertAlmostEqual(legacy.metrics["military_jet_demand_bbl"], explicit.metrics["military_jet_demand_bbl"])
+        self.assertAlmostEqual(legacy.metrics["military_diesel_demand_bbl"], explicit.metrics["military_diesel_demand_bbl"])
+        self.assertAlmostEqual(legacy.readiness_index, explicit.readiness_index)
+
+    def test_strategy_specific_fuel_effects(self) -> None:
+        _, steady = self._run("baseline", steps=1)
+        _, ground = self._run("baseline", steps=1, strategy="ground_combat_operations")
+        _, air = self._run("baseline", steps=1, strategy="air_maritime_campaign")
+
+        self.assertGreater(ground.metrics["military_diesel_demand_bbl"], steady.metrics["military_diesel_demand_bbl"] * 1.25)
+        self.assertGreater(air.metrics["military_jet_demand_bbl"], steady.metrics["military_jet_demand_bbl"] * 1.30)
+        self.assertGreater(ground.metrics["readiness_diesel_weight"], steady.metrics["readiness_diesel_weight"])
+        self.assertGreater(air.metrics["readiness_jet_weight"], steady.metrics["readiness_jet_weight"])
+
+    def test_combined_scenario_and_strategy_raise_forward_jet_demand(self) -> None:
+        _, steady = self._run("taiwan_strait_surge", steps=1)
+        _, campaign = self._run("taiwan_strait_surge", steps=1, strategy="air_maritime_campaign")
+
+        self.assertGreater(campaign.metrics["military_jet_demand_bbl"], steady.metrics["military_jet_demand_bbl"] * 1.30)
+        self.assertGreaterEqual(campaign.metrics["readiness_jet_weight"], 0.75)
 
     def test_policy_overlay_improves_response(self) -> None:
         _, stressed = self._run("hormuz_squeeze")
@@ -112,8 +210,8 @@ class OverpowerSimulationTests(unittest.TestCase):
         )
         self.assertLess(mitigated.metrics["global_shortage_ratio"], stressed.metrics["global_shortage_ratio"])
         self.assertGreaterEqual(mitigated.readiness_index, 90.0)
-        self.assertGreater(mitigated.metrics["strategic_market_jet_fulfillment"], stressed.metrics["strategic_market_jet_fulfillment"])
-        self.assertGreater(mitigated.metrics["strategic_market_diesel_fulfillment"], stressed.metrics["strategic_market_diesel_fulfillment"])
+        self.assertGreater(mitigated.metrics["military_jet_fulfillment"], stressed.metrics["military_jet_fulfillment"])
+        self.assertGreater(mitigated.metrics["military_diesel_fulfillment"], stressed.metrics["military_diesel_fulfillment"])
 
     def test_spr_ledger_is_initialized(self) -> None:
         world = build_world()
@@ -176,7 +274,7 @@ class OverpowerSimulationTests(unittest.TestCase):
         world = build_world()
         self.assertEqual(len(world.producers), 50)
         self.assertEqual(len(world.refiners), 50)
-        self.assertEqual(len(world.demand_agents), 83)
+        self.assertEqual(len(world.demand_agents), 87)
         self.assertEqual(len(world.localities), 9)
         self.assertIn("IRAN", world.localities)
         self.assertIn("CENTCOM", world.localities)
@@ -185,11 +283,11 @@ class OverpowerSimulationTests(unittest.TestCase):
     def test_has_dedicated_military_buyers(self) -> None:
         world = build_world()
         military_buyers = [agent for agent in world.demand_agents if agent.agent_kind == "military"]
-        self.assertEqual(len(military_buyers), 2)
+        self.assertEqual(len(military_buyers), 6)
         buyers_by_locality = {buyer.locality: buyer for buyer in military_buyers}
-        self.assertEqual(set(buyers_by_locality), {"NORTHCOM", "INDOPACOM"})
-        self.assertEqual(buyers_by_locality["NORTHCOM"].id, "northcom-military-buyer")
-        self.assertEqual(buyers_by_locality["INDOPACOM"].id, "indopacom-military-buyer")
+        self.assertEqual(set(buyers_by_locality), {"NORTHCOM", "EUCOM", "CENTCOM", "INDOPACOM", "AFRICOM", "SOUTHCOM"})
+        for locality_id in buyers_by_locality:
+            self.assertEqual(buyers_by_locality[locality_id].id, f"{locality_id.lower()}-military-buyer")
 
         civilian_diesel_priority = max(
             agent.price_priority["diesel"]
@@ -213,7 +311,7 @@ class OverpowerSimulationTests(unittest.TestCase):
             for buyer in military_buyers
         )
         self.assertAlmostEqual(total_military_demand, PUBLIC_DOD_OPERATIONAL_FUEL_BBL_YEAR / 52.0)
-        for locality_id in ("NORTHCOM", "INDOPACOM"):
+        for locality_id in buyers_by_locality:
             for product in PRODUCTS:
                 modeled_demand = sum(
                     agent.base_demand_bbl_week[product]

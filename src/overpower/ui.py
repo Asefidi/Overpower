@@ -5,11 +5,14 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
-from .data import LOCALITY_LABELS, build_world, default_simulation_config, get_scenario_presets
+from .data import LOCALITY_LABELS, build_world, default_simulation_config, get_military_strategy_presets, get_scenario_presets
 from .sim import (
     DEFAULT_SHIPPING_COST_MULTIPLIER,
+    HOUSEHOLD_QUARTILES,
     PRODUCTS,
     PolicyControls,
+    SECTORS,
+    SPR_MAX_PURCHASE_BBL_PER_DAY,
     SimulationConfig,
     StepResult,
     WorldState,
@@ -40,6 +43,7 @@ OPS_LANE_OPEN = "#6f879d"
 OPS_CHART_COLORS = ("#38bdf8", "#f5b942", "#ff453a", "#22c55e", "#a78bfa", "#fb7185", "#14b8a6", "#eab308", "#94a3b8")
 SIM_START_DATE = date(2026, 1, 1)
 SIM_STEP_DAYS = 7
+ECONOMIC_FOCUS_LOCALITY = "NORTHCOM"
 
 
 def _week_date(week: int) -> date:
@@ -93,6 +97,7 @@ def _route_overrides_from_editor(world: WorldState, route_df: pd.DataFrame) -> d
 def _build_config(route_overrides: dict[tuple[str, str], dict[str, float | int | bool]]) -> SimulationConfig:
     return SimulationConfig(
         selected_scenario=st.session_state["scenario_name"],
+        selected_military_strategy=st.session_state["military_strategy_name"],
         route_overrides=route_overrides,
         policy_controls=PolicyControls(
             reserve_release_kbd=float(st.session_state["reserve_release_kbd"]),
@@ -589,6 +594,71 @@ def _shortage_heatmap_frame(result: StepResult | None) -> pd.DataFrame:
     return pd.DataFrame(rows).set_index("locality")
 
 
+def _northcom_household_affordability_frame(result: StepResult | None) -> pd.DataFrame:
+    if result is None:
+        return pd.DataFrame()
+    household_scores = getattr(result, "household_fuel_affordability", {})
+    northcom_scores = household_scores.get(ECONOMIC_FOCUS_LOCALITY, {})
+    if not northcom_scores:
+        return pd.DataFrame()
+    rows = []
+    for quartile in HOUSEHOLD_QUARTILES:
+        rows.append(
+            {
+                "quartile": quartile.upper(),
+                "affordability_index": northcom_scores.get(quartile, 100.0),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _northcom_industrial_risk_frame(result: StepResult | None) -> pd.DataFrame:
+    if result is None:
+        return pd.DataFrame()
+    industrial_scores = getattr(result, "industrial_output_at_risk", {})
+    northcom_scores = industrial_scores.get(ECONOMIC_FOCUS_LOCALITY, {})
+    if not northcom_scores:
+        return pd.DataFrame()
+    rows = []
+    for sector in SECTORS:
+        rows.append(
+            {
+                "sector": sector.replace("_", " ").title(),
+                "shortage_component_pct": northcom_scores.get(f"{sector}_shortage_component", 0.0) * 100.0,
+                "price_component_pct": northcom_scores.get(f"{sector}_price_component", 0.0) * 100.0,
+                "output_at_risk_pct": northcom_scores.get(sector, 0.0) * 100.0,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _northcom_economic_history_frame(world: WorldState) -> pd.DataFrame:
+    rows = []
+    for step in world.history:
+        household_scores = getattr(step, "household_fuel_affordability", {}).get(ECONOMIC_FOCUS_LOCALITY, {})
+        industrial_scores = getattr(step, "industrial_output_at_risk", {}).get(ECONOMIC_FOCUS_LOCALITY, {})
+        if not household_scores and not industrial_scores:
+            continue
+        rows.append(
+            {
+                "week": step.week,
+                "date": _week_date(step.week),
+                "date_label": _week_date_label(step.week),
+                "household_affordability": household_scores.get("overall", 100.0),
+                "industrial_output_at_risk_pct": industrial_scores.get("overall", 0.0) * 100.0,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _affordability_color(score: float) -> str:
+    if score >= 94.0:
+        return OPS_GREEN
+    if score >= 78.0:
+        return OPS_AMBER
+    return OPS_RED
+
+
 def _apply_ops_plot_theme(figure, height: int) -> None:
     figure.update_layout(
         height=height,
@@ -743,9 +813,184 @@ def _render_wide_line_chart(df: pd.DataFrame, title: str) -> None:
     st.line_chart(df)
 
 
+def _render_northcom_economic_trend(df: pd.DataFrame) -> None:
+    st.subheader("NORTHCOM Economic Trend")
+    if df.empty:
+        st.info("Run the model for at least one week to populate this chart.")
+        return
+    if go is not None:
+        figure = go.Figure()
+        figure.add_trace(
+            go.Scatter(
+                x=df["date"],
+                y=df["household_affordability"],
+                mode="lines+markers",
+                name="Household Affordability",
+                line={"color": OPS_GREEN, "width": 2.4},
+                marker={"size": 5},
+                customdata=df[["week", "date_label"]],
+                hovertemplate=(
+                    "<b>%{customdata[1]}</b><br>"
+                    "Week %{customdata[0]}<br>"
+                    "Affordability: %{y:.1f}"
+                    "<extra></extra>"
+                ),
+            )
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=df["date"],
+                y=df["industrial_output_at_risk_pct"],
+                mode="lines+markers",
+                name="Industrial Output At Risk",
+                yaxis="y2",
+                line={"color": OPS_AMBER, "width": 2.4},
+                marker={"size": 5},
+                customdata=df[["week", "date_label"]],
+                hovertemplate=(
+                    "<b>%{customdata[1]}</b><br>"
+                    "Week %{customdata[0]}<br>"
+                    "Output at risk: %{y:.1f}%"
+                    "<extra></extra>"
+                ),
+            )
+        )
+        _apply_ops_plot_theme(figure, 300)
+        max_risk = max(10.0, float(df["industrial_output_at_risk_pct"].max()) * 1.25)
+        figure.update_layout(
+            yaxis={"title": "Affordability Index", "range": [0, 125]},
+            yaxis2={
+                "title": "Output At Risk",
+                "overlaying": "y",
+                "side": "right",
+                "range": [0, max_risk],
+                "ticksuffix": "%",
+                "gridcolor": "rgba(0,0,0,0)",
+            },
+            legend={"orientation": "h", "y": 1.12, "x": 0.0},
+        )
+        st.plotly_chart(figure, width="stretch", theme=None, config={"displayModeBar": False, "responsive": True})
+        return
+    fallback = df.set_index("date")[["household_affordability", "industrial_output_at_risk_pct"]]
+    st.line_chart(fallback)
+
+
+def _render_northcom_household_affordability(df: pd.DataFrame) -> None:
+    st.subheader("Household Fuel Affordability")
+    if df.empty:
+        st.info("Run the model for at least one week to populate this chart.")
+        return
+    if go is not None:
+        colors = [_affordability_color(float(score)) for score in df["affordability_index"]]
+        figure = go.Figure(
+            go.Bar(
+                x=df["quartile"],
+                y=df["affordability_index"],
+                marker={"color": colors, "line": {"color": OPS_BORDER, "width": 0.8}},
+                text=df["affordability_index"].map(lambda value: f"{value:.0f}"),
+                textposition="outside",
+                cliponaxis=False,
+                hovertemplate="<b>%{x}</b><br>Affordability index: %{y:.1f}<extra></extra>",
+            )
+        )
+        figure.add_shape(
+            type="line",
+            x0=-0.5,
+            x1=len(df) - 0.5,
+            y0=100.0,
+            y1=100.0,
+            line={"color": OPS_MUTED, "width": 1, "dash": "dot"},
+        )
+        _apply_ops_plot_theme(figure, 285)
+        figure.update_layout(showlegend=False)
+        figure.update_xaxes(title_text=None)
+        figure.update_yaxes(title_text="Index", range=[0, 130])
+        st.plotly_chart(figure, width="stretch", theme=None, config={"displayModeBar": False, "responsive": True})
+        return
+    st.bar_chart(df.set_index("quartile")["affordability_index"])
+
+
+def _render_northcom_industrial_risk(df: pd.DataFrame) -> None:
+    st.subheader("Industrial Output At Risk")
+    if df.empty:
+        st.info("Run the model for at least one week to populate this chart.")
+        return
+    chart_df = df.sort_values("output_at_risk_pct", ascending=True)
+    if go is not None:
+        figure = go.Figure()
+        figure.add_trace(
+            go.Bar(
+                x=chart_df["shortage_component_pct"],
+                y=chart_df["sector"],
+                orientation="h",
+                name="Shortage",
+                marker={"color": OPS_RED, "line": {"color": OPS_BORDER, "width": 0.8}},
+                hovertemplate="<b>%{y}</b><br>Shortage component: %{x:.1f}%<extra></extra>",
+            )
+        )
+        figure.add_trace(
+            go.Bar(
+                x=chart_df["price_component_pct"],
+                y=chart_df["sector"],
+                orientation="h",
+                name="Price Drag",
+                marker={"color": OPS_AMBER, "line": {"color": OPS_BORDER, "width": 0.8}},
+                customdata=chart_df[["output_at_risk_pct"]],
+                hovertemplate=(
+                    "<b>%{y}</b><br>"
+                    "Price drag: %{x:.1f}%<br>"
+                    "Total at risk: %{customdata[0]:.1f}%"
+                    "<extra></extra>"
+                ),
+            )
+        )
+        _apply_ops_plot_theme(figure, 285)
+        max_risk = max(10.0, float(chart_df["output_at_risk_pct"].max()) * 1.18)
+        figure.update_layout(barmode="stack", legend={"orientation": "h", "y": 1.12, "x": 0.0})
+        figure.update_xaxes(title_text="Output at risk", range=[0, max_risk], ticksuffix="%")
+        figure.update_yaxes(title_text=None, automargin=True)
+        st.plotly_chart(figure, width="stretch", theme=None, config={"displayModeBar": False, "responsive": True})
+        return
+    fallback = chart_df.set_index("sector")[["shortage_component_pct", "price_component_pct"]]
+    st.bar_chart(fallback)
+
+
+def _render_northcom_economic_panel(world: WorldState, latest: StepResult | None) -> None:
+    st.subheader("NORTHCOM Economic Exposure")
+    if latest is None:
+        st.info("Run the model to populate NORTHCOM household and industrial indicators.")
+        return
+
+    household_scores = getattr(latest, "household_fuel_affordability", {}).get(ECONOMIC_FOCUS_LOCALITY, {})
+    industrial_scores = getattr(latest, "industrial_output_at_risk", {}).get(ECONOMIC_FOCUS_LOCALITY, {})
+    affordability = household_scores.get("overall", latest.metrics.get("northcom_household_fuel_affordability", 100.0))
+    price_burden = household_scores.get("price_burden_ratio", latest.metrics.get("northcom_household_fuel_price_burden", 1.0))
+    output_at_risk = industrial_scores.get("overall", latest.metrics.get("northcom_industrial_output_at_risk", 0.0))
+    price_component = industrial_scores.get("price_component", latest.metrics.get("northcom_industrial_price_component", 0.0))
+
+    metric_1, metric_2, metric_3, metric_4 = st.columns(4)
+    metric_1.metric("Household Affordability", f"{affordability:.0f}")
+    metric_2.metric("Fuel Cost Burden", f"{price_burden:.2f}x")
+    metric_3.metric("Industrial Output At Risk", f"{output_at_risk:.1%}")
+    metric_4.metric("Industrial Price Drag", f"{price_component:.1%}")
+
+    trend_df = _northcom_economic_history_frame(world)
+    household_df = _northcom_household_affordability_frame(latest)
+    industrial_df = _northcom_industrial_risk_frame(latest)
+
+    _render_northcom_economic_trend(trend_df)
+    household_col, industrial_col = st.columns(2)
+    with household_col:
+        _render_northcom_household_affordability(household_df)
+    with industrial_col:
+        _render_northcom_industrial_risk(industrial_df)
+
+
 def _ensure_state() -> None:
     if "scenario_name" not in st.session_state:
         st.session_state["scenario_name"] = "baseline"
+    if "military_strategy_name" not in st.session_state:
+        st.session_state["military_strategy_name"] = "steady_state"
     if "reserve_release_kbd" not in st.session_state:
         st.session_state["reserve_release_kbd"] = 0.0
     if "reserve_release_mode" not in st.session_state:
@@ -761,13 +1006,21 @@ def _ensure_state() -> None:
     if "shipping_cost_multiplier" not in st.session_state:
         st.session_state["shipping_cost_multiplier"] = DEFAULT_SHIPPING_COST_MULTIPLIER
     if "world" not in st.session_state:
-        st.session_state["world"] = build_world(default_simulation_config(st.session_state["scenario_name"]))
+        st.session_state["world"] = build_world(
+            default_simulation_config(
+                st.session_state["scenario_name"],
+                st.session_state["military_strategy_name"],
+            )
+        )
     if "route_editor_df" not in st.session_state:
         st.session_state["route_editor_df"] = _initial_route_df(st.session_state["world"])
 
 
 def _reset_world() -> None:
-    config = default_simulation_config(st.session_state["scenario_name"])
+    config = default_simulation_config(
+        st.session_state["scenario_name"],
+        st.session_state["military_strategy_name"],
+    )
     st.session_state["world"] = build_world(config)
     st.session_state["route_editor_df"] = _initial_route_df(st.session_state["world"])
 
@@ -879,6 +1132,11 @@ def main() -> None:
     )
     _ensure_state()
     scenarios = get_scenario_presets()
+    military_strategies = get_military_strategy_presets()
+    if st.session_state["scenario_name"] not in scenarios:
+        st.session_state["scenario_name"] = "baseline"
+    if st.session_state["military_strategy_name"] not in military_strategies:
+        st.session_state["military_strategy_name"] = "steady_state"
 
     st.title("Overpower Command View")
 
@@ -890,7 +1148,28 @@ def main() -> None:
             format_func=lambda key: scenarios[key].name,
             key="scenario_name",
         )
+        st.selectbox(
+            "Military strategy",
+            options=list(military_strategies.keys()),
+            format_func=lambda key: military_strategies[key].name,
+            key="military_strategy_name",
+        )
+        st.subheader("SPR Orders")
         st.slider("Reserve release (kbd)", 0.0, 1500.0, key="reserve_release_kbd", step=50.0)
+        st.number_input(
+            "Purchase quantity (kbd)",
+            min_value=0.0,
+            max_value=SPR_MAX_PURCHASE_BBL_PER_DAY / 1_000.0,
+            step=25.0,
+            key="reserve_purchase_kbd",
+        )
+        st.number_input(
+            "Purchase limit price ($/bbl)",
+            min_value=0.0,
+            max_value=250.0,
+            step=1.0,
+            key="reserve_purchase_price_ceiling_per_bbl",
+        )
         st.slider("Refinery subsidy", 0.0, 0.25, key="refinery_subsidy_pct", step=0.01)
         st.slider("Military priority", 0.0, 0.35, key="military_priority_pct", step=0.01)
         reset_clicked = st.button("Reset", width="stretch")
@@ -919,17 +1198,27 @@ def main() -> None:
     route_overrides = _route_overrides_from_editor(st.session_state["world"], st.session_state["route_editor_df"])
     config = _build_config(route_overrides)
     scenario = scenarios[config.selected_scenario]
+    military_strategy = military_strategies[config.selected_military_strategy]
     route_snapshot = _effective_route_snapshot(st.session_state["world"], config, config.selected_scenario)
 
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
         if st.button("Step 1 Week", width="stretch"):
-            step_world(st.session_state["world"], config, scenarios)
+            step_world(st.session_state["world"], config, scenarios, military_strategies)
     with col2:
         if st.button("Run 4 Weeks", width="stretch"):
-            run_n_steps(st.session_state["world"], config, scenarios, 4)
+            run_n_steps(st.session_state["world"], config, scenarios, 4, military_strategies)
     with col3:
-        st.markdown(f'<div class="scenario-brief">{scenario.description}</div>', unsafe_allow_html=True)
+        st.markdown(
+            (
+                '<div class="scenario-brief">'
+                f"<strong>{scenario.name}</strong>: {scenario.description}"
+                "<br>"
+                f"<strong>{military_strategy.name}</strong>: {military_strategy.description}"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
 
     world: WorldState = st.session_state["world"]
     latest = _latest_result(world)
@@ -972,6 +1261,17 @@ def main() -> None:
         else:
             for event in latest.top_events:
                 st.markdown(f"- {event}")
+        st.subheader("Scenario & Strategy Notes")
+        readiness_weights = military_strategy.readiness_product_weights
+        notes = [
+            f"- Scenario: **{scenario.name}**",
+            f"- Strategy: **{military_strategy.name}**",
+            f"- Readiness weights: jet `{readiness_weights.get('jet', 0.60):.0%}`, diesel `{readiness_weights.get('diesel', 0.40):.0%}`",
+            f"- Manual route overrides: `{len(route_overrides)}` active",
+        ]
+        notes.extend(f"- {note}" for note in scenario.operational_notes[:2])
+        notes.extend(f"- {note}" for note in military_strategy.operational_notes[:2])
+        st.markdown("\n".join(notes))
         st.subheader("SPR Status")
         pending_returns_mmbbl = sum(scheduled.volume_bbl for scheduled in world.strategic_reserve_pending_returns) / 1_000_000.0
         st.markdown(
@@ -983,6 +1283,8 @@ def main() -> None:
                 ]
             )
         )
+
+    _render_northcom_economic_panel(world, latest)
 
     price_history, shortage_history, readiness_history = _history_frames(world)
 
@@ -1018,6 +1320,20 @@ def main() -> None:
             st.info("Run the model for at least one week to populate this chart.")
         else:
             _render_wide_line_chart(shortage_history.pivot_table(index="date", columns="locality", values="shortage_ratio", aggfunc="last"), "Shortage Trend")
+
+    chart_col5, chart_col6 = st.columns(2)
+    with chart_col5:
+        if price_history.empty:
+            st.subheader("Gasoline Price Trend")
+            st.info("Run the model for at least one week to populate this chart.")
+        else:
+            _render_line_chart(price_history, "Gasoline Price Trend", "gasoline")
+    with chart_col6:
+        if price_history.empty:
+            st.subheader("Jet Fuel Price Trend")
+            st.info("Run the model for at least one week to populate this chart.")
+        else:
+            _render_line_chart(price_history, "Jet Fuel Price Trend", "jet")
 
     util_df = _refinery_utilization_frame(world, latest)
     heatmap_df = _shortage_heatmap_frame(latest)

@@ -66,6 +66,23 @@ STRATEGIC_LOCALITY_WEIGHTS = {
     "AFRICOM": 0.05,
     "SOUTHCOM": 0.03,
 }
+DEFAULT_READINESS_PRODUCT_WEIGHTS = {"jet": 0.60, "diesel": 0.40}
+HOUSEHOLD_AFFORDABILITY_SEGMENT_WEIGHTS = {"q1": 1.55, "q2": 1.22, "q3": 1.00, "q4": 0.78}
+INDUSTRIAL_SEGMENT_OUTPUT_WEIGHTS = {
+    "heavy_logistics": 1.18,
+    "aviation": 1.12,
+    "agriculture": 1.08,
+    "light_logistics": 0.94,
+    "other": 0.68,
+}
+INDUSTRIAL_PRODUCT_CRITICALITY = {
+    "heavy_logistics": {"gasoline": 0.36, "diesel": 1.00, "jet": 0.18},
+    "aviation": {"gasoline": 0.12, "diesel": 0.20, "jet": 1.00},
+    "agriculture": {"gasoline": 0.42, "diesel": 1.00, "jet": 0.08},
+    "light_logistics": {"gasoline": 0.78, "diesel": 0.88, "jet": 0.12},
+    "other": {"gasoline": 0.42, "diesel": 0.54, "jet": 0.36},
+}
+INDUSTRIAL_PRICE_DRAG_FACTOR = 0.32
 
 
 @dataclass(slots=True)
@@ -90,6 +107,7 @@ class SimulationConfig:
     seed: int = 0
     start_week: int = 0
     selected_scenario: str = "baseline"
+    selected_military_strategy: str = "steady_state"
     route_overrides: dict[tuple[str, str], dict[str, float | int | bool]] = field(default_factory=dict)
     policy_controls: PolicyControls = field(default_factory=PolicyControls)
     demand_sensitivity: float = 0.20
@@ -195,6 +213,7 @@ class ProductAuctionResult:
     trades: dict[tuple[str, str], list[tuple[float, float]]]
     military_demand_by_product: dict[str, float]
     military_fulfilled_by_product: dict[str, float]
+    agent_product_outcomes: dict[tuple[str, str], dict[str, Any]]
 
 
 @dataclass(slots=True)
@@ -210,6 +229,17 @@ class ScenarioPreset:
     refinery_country_shocks: dict[str, float] = field(default_factory=dict)
     military_demand_shocks: dict[str, float] = field(default_factory=dict)
     policy_defaults: PolicyControls = field(default_factory=neutral_policy_controls)
+
+
+@dataclass(slots=True)
+class MilitaryStrategyPreset:
+    name: str
+    description: str
+    operational_notes: tuple[str, ...] = ()
+    product_demand_multipliers: dict[str, float] = field(default_factory=dict)
+    locality_demand_shocks: dict[str, float] = field(default_factory=dict)
+    product_bid_multipliers: dict[str, float] = field(default_factory=dict)
+    readiness_product_weights: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_READINESS_PRODUCT_WEIGHTS))
 
 
 @dataclass(slots=True)
@@ -232,6 +262,8 @@ class StepResult:
     strategic_reserve_released_bbl: float
     strategic_reserve_purchased_bbl: float
     strategic_reserve_returned_bbl: float
+    household_fuel_affordability: dict[str, dict[str, float]]
+    industrial_output_at_risk: dict[str, dict[str, float]]
     metrics: dict[str, float]
 
 
@@ -284,6 +316,39 @@ def _stable_noise(seed: int, week: int, key: str) -> float:
 
 def _is_baseline_scenario(scenario: ScenarioPreset) -> bool:
     return scenario.name == "Baseline"
+
+
+def default_military_strategy() -> MilitaryStrategyPreset:
+    return MilitaryStrategyPreset(
+        name="Steady State",
+        description="Baseline operational posture with steady military fuel purchases and the default jet/diesel readiness balance.",
+        operational_notes=(
+            "Posture: no additional operational surge beyond public DoD operational-energy demand.",
+            "Demand effect: military fuel buyers retain their baseline jet and diesel purchase profile.",
+            "Readiness effect: readiness weights remain 60% jet fuel fulfillment and 40% diesel fulfillment.",
+        ),
+        product_demand_multipliers={"gasoline": 1.0, "diesel": 1.0, "jet": 1.0},
+        product_bid_multipliers={"gasoline": 1.0, "diesel": 1.0, "jet": 1.0},
+        readiness_product_weights=dict(DEFAULT_READINESS_PRODUCT_WEIGHTS),
+    )
+
+
+def _select_military_strategy(
+    config: SimulationConfig,
+    military_strategies: dict[str, MilitaryStrategyPreset] | None,
+) -> MilitaryStrategyPreset:
+    if not military_strategies:
+        return default_military_strategy()
+    return military_strategies.get(config.selected_military_strategy, military_strategies.get("steady_state", default_military_strategy()))
+
+
+def _readiness_product_weights(strategy: MilitaryStrategyPreset) -> dict[str, float]:
+    jet = max(0.0, strategy.readiness_product_weights.get("jet", DEFAULT_READINESS_PRODUCT_WEIGHTS["jet"]))
+    diesel = max(0.0, strategy.readiness_product_weights.get("diesel", DEFAULT_READINESS_PRODUCT_WEIGHTS["diesel"]))
+    total = jet + diesel
+    if total <= 0.0:
+        return dict(DEFAULT_READINESS_PRODUCT_WEIGHTS)
+    return {"jet": jet / total, "diesel": diesel / total}
 
 
 def _seasonal_multiplier(week: int, product: str, segment: str) -> float:
@@ -651,12 +716,27 @@ def _military_conflict_bid_multiplier(agent: DemandAgent, product: str, scenario
     return 1.0 + max(0.0, direct_shock) * 0.65 + max(0.0, fear_shock) * response
 
 
+def _military_strategy_demand_multiplier(agent: DemandAgent, product: str, strategy: MilitaryStrategyPreset) -> float:
+    if agent.agent_kind != "military":
+        return 1.0
+    product_multiplier = max(0.0, strategy.product_demand_multipliers.get(product, 1.0))
+    locality_multiplier = 1.0 + max(0.0, strategy.locality_demand_shocks.get(agent.locality, 0.0))
+    return product_multiplier * locality_multiplier
+
+
+def _military_strategy_bid_multiplier(agent: DemandAgent, product: str, strategy: MilitaryStrategyPreset) -> float:
+    if agent.agent_kind != "military":
+        return 1.0
+    return max(0.0, strategy.product_bid_multipliers.get(product, 1.0))
+
+
 def _demand_for_agent(
     agent: DemandAgent,
     world: WorldState,
     policy: PolicyControls,
     config: SimulationConfig,
     scenario: ScenarioPreset,
+    strategy: MilitaryStrategyPreset,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
     locality = world.localities[agent.locality]
     demand: dict[str, float] = {}
@@ -683,7 +763,16 @@ def _demand_for_agent(
         panic_stocking = 1.0 + max(0.0, locality.fear_multiplier - 1.0) * panic_sensitivity
         backlog_multiplier = 1.0 + min(0.45, backlog_ratio * config.demand_sensitivity)
         conflict_multiplier = _military_conflict_demand_multiplier(agent, product, scenario)
-        unconstrained_quantity = base * seasonal * demand_noise * panic_stocking * backlog_multiplier * conflict_multiplier
+        strategy_demand_multiplier = _military_strategy_demand_multiplier(agent, product, strategy)
+        unconstrained_quantity = (
+            base
+            * seasonal
+            * demand_noise
+            * panic_stocking
+            * backlog_multiplier
+            * conflict_multiplier
+            * strategy_demand_multiplier
+        )
         quantity = unconstrained_quantity * price_response
         demand[product] = quantity
         rationing_weight = _clamp(0.18 + max(0.0, locality.fear_multiplier - 1.0) * 0.20, 0.18, 0.70)
@@ -700,6 +789,7 @@ def _demand_for_agent(
             * locality.fear_multiplier
             * (1.0 + strategic_boost)
             * _military_conflict_bid_multiplier(agent, product, scenario)
+            * _military_strategy_bid_multiplier(agent, product, strategy)
             * (1.0 + min(0.10, backlog_ratio * 0.05))
         )
         if agent.agent_kind == "military":
@@ -708,6 +798,7 @@ def _demand_for_agent(
                 * MILITARY_MIN_BID_MULTIPLIER[product]
                 * (1.0 + policy.military_priority_pct)
                 * _military_conflict_bid_multiplier(agent, product, scenario)
+                * _military_strategy_bid_multiplier(agent, product, strategy)
             )
             bids[product] = max(bids[product], military_bid_floor)
     return demand, bids, latent_demand
@@ -879,6 +970,7 @@ def _apply_baseline_commercial_balancing(
     demand_by_locality_product: dict[str, dict[str, float]],
     fulfilled_by_locality_product: dict[str, dict[str, float]],
     unmet_by_locality_product: dict[str, dict[str, float]],
+    agent_product_outcomes: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> None:
     if not _is_baseline_scenario(scenario):
         return
@@ -893,6 +985,33 @@ def _apply_baseline_commercial_balancing(
             balanced_volume = unmet - max_unmet
             unmet_by_locality_product[locality_id][product] = max_unmet
             fulfilled_by_locality_product[locality_id][product] += balanced_volume
+            if agent_product_outcomes is not None:
+                _rebalance_agent_product_outcomes(agent_product_outcomes, locality_id, product, balanced_volume)
+
+
+def _rebalance_agent_product_outcomes(
+    agent_product_outcomes: dict[tuple[str, str], dict[str, Any]],
+    locality_id: str,
+    product: str,
+    balanced_volume_bbl: float,
+) -> None:
+    if balanced_volume_bbl <= 0.0:
+        return
+    candidates = [
+        outcome
+        for (_, outcome_product), outcome in agent_product_outcomes.items()
+        if outcome_product == product
+        and outcome["locality"] == locality_id
+        and float(outcome["unmet_bbl"]) > 0.0
+    ]
+    total_unmet = sum(float(outcome["unmet_bbl"]) for outcome in candidates)
+    if total_unmet <= 0.0:
+        return
+    for outcome in candidates:
+        unmet = float(outcome["unmet_bbl"])
+        adjustment = min(unmet, balanced_volume_bbl * unmet / total_unmet)
+        outcome["unmet_bbl"] = max(0.0, unmet - adjustment)
+        outcome["fulfilled_bbl"] = float(outcome["fulfilled_bbl"]) + adjustment
 
 
 def _clear_product_auction(
@@ -900,6 +1019,7 @@ def _clear_product_auction(
     config: SimulationConfig,
     policy: PolicyControls,
     scenario: ScenarioPreset,
+    strategy: MilitaryStrategyPreset,
     effective_routes: dict[tuple[str, str], RouteState],
     demand_by_locality_product: dict[str, dict[str, float]],
     fulfilled_by_locality_product: dict[str, dict[str, float]],
@@ -908,6 +1028,7 @@ def _clear_product_auction(
     product_trades: dict[tuple[str, str], list[tuple[float, float]]] = defaultdict(list)
     military_demand_by_product = {product: 0.0 for product in PRODUCTS}
     military_fulfilled_by_product = {product: 0.0 for product in PRODUCTS}
+    agent_product_outcomes: dict[tuple[str, str], dict[str, Any]] = {}
 
     for product in PRODUCTS:
         product_route_remaining_capacity = {
@@ -954,7 +1075,7 @@ def _clear_product_auction(
         buy_tranches: list[dict[str, Any]] = []
         demand_trackers: dict[tuple[str, str], dict[str, Any]] = {}
         for agent in world.demand_agents:
-            quantities, bids, latent_quantities = _demand_for_agent(agent, world, policy, config, scenario)
+            quantities, bids, latent_quantities = _demand_for_agent(agent, world, policy, config, scenario, strategy)
             demand = quantities[product]
             latent_demand = latent_quantities[product]
             bid = bids[product]
@@ -1089,6 +1210,16 @@ def _clear_product_auction(
                 military_demand_by_product[product] += demand
                 military_fulfilled_by_product[product] += fulfilled
             unmet_by_locality_product[agent.locality][product] += unmet
+            agent_product_outcomes[(agent.id, product)] = {
+                "locality": agent.locality,
+                "agent_kind": agent.agent_kind,
+                "segment": agent.segment,
+                "income_multiplier": agent.income_multiplier,
+                "demand_bbl": demand,
+                "fulfilled_bbl": fulfilled,
+                "unmet_bbl": unmet,
+                "latent_demand_bbl": tracker["latent_demand"],
+            }
             agent.backlog_bbl[product] = _next_backlog_bbl(
                 agent,
                 product,
@@ -1102,7 +1233,144 @@ def _clear_product_auction(
         trades=product_trades,
         military_demand_by_product=military_demand_by_product,
         military_fulfilled_by_product=military_fulfilled_by_product,
+        agent_product_outcomes=agent_product_outcomes,
     )
+
+
+def _empty_household_bucket() -> dict[str, float]:
+    return {"baseline_cost": 0.0, "current_cost": 0.0, "demand_bbl": 0.0, "fulfilled_bbl": 0.0}
+
+
+def _empty_industrial_bucket() -> dict[str, float]:
+    return {"weighted_demand_bbl": 0.0, "weighted_unmet_bbl": 0.0, "weighted_price_drag_bbl": 0.0}
+
+
+def _calculate_economic_indicators(
+    product_prices: dict[str, dict[str, float]],
+    agent_product_outcomes: dict[tuple[str, str], dict[str, Any]],
+) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
+    household_buckets: dict[str, dict[str, dict[str, float]]] = defaultdict(
+        lambda: defaultdict(_empty_household_bucket)
+    )
+    industrial_buckets: dict[str, dict[str, dict[str, float]]] = defaultdict(
+        lambda: defaultdict(_empty_industrial_bucket)
+    )
+
+    for (_, product), outcome in agent_product_outcomes.items():
+        locality_id = str(outcome["locality"])
+        agent_kind = str(outcome["agent_kind"])
+        segment = str(outcome["segment"])
+        demand_bbl = float(outcome["demand_bbl"])
+        fulfilled_bbl = float(outcome["fulfilled_bbl"])
+        unmet_bbl = float(outcome["unmet_bbl"])
+        if demand_bbl <= 0.0:
+            continue
+        price = product_prices.get(locality_id, {}).get(product, BASE_PRODUCT_PRICES[product])
+
+        if agent_kind == "household":
+            income_multiplier = max(0.20, float(outcome.get("income_multiplier", 1.0)))
+            segment_weight = HOUSEHOLD_AFFORDABILITY_SEGMENT_WEIGHTS.get(segment, 1.0) / income_multiplier
+            for bucket_name in (segment, "overall"):
+                bucket = household_buckets[locality_id][bucket_name]
+                bucket["baseline_cost"] += BASE_PRODUCT_PRICES[product] * demand_bbl * segment_weight
+                bucket["current_cost"] += price * demand_bbl * segment_weight
+                bucket["demand_bbl"] += demand_bbl * segment_weight
+                bucket["fulfilled_bbl"] += fulfilled_bbl * segment_weight
+
+        if agent_kind == "sector":
+            criticality = INDUSTRIAL_PRODUCT_CRITICALITY.get(segment, {}).get(product, 0.0)
+            if criticality <= 0.0:
+                continue
+            segment_weight = INDUSTRIAL_SEGMENT_OUTPUT_WEIGHTS.get(segment, 1.0)
+            weighted_demand = demand_bbl * criticality * segment_weight
+            weighted_unmet = unmet_bbl * criticality * segment_weight
+            price_ratio = price / max(1.0, BASE_PRODUCT_PRICES[product])
+            weighted_price_drag = (
+                fulfilled_bbl
+                * criticality
+                * segment_weight
+                * max(0.0, price_ratio - 1.0)
+                * INDUSTRIAL_PRICE_DRAG_FACTOR
+            )
+            for bucket_name in (segment, "overall"):
+                bucket = industrial_buckets[locality_id][bucket_name]
+                bucket["weighted_demand_bbl"] += weighted_demand
+                bucket["weighted_unmet_bbl"] += weighted_unmet
+                bucket["weighted_price_drag_bbl"] += weighted_price_drag
+
+    household_scores = {
+        locality_id: {
+            "overall": 100.0,
+            "price_burden_ratio": 1.0,
+            "fulfillment_ratio": 1.0,
+            **{quartile: 100.0 for quartile in HOUSEHOLD_QUARTILES},
+        }
+        for locality_id in product_prices
+    }
+    for locality_id, locality_buckets in household_buckets.items():
+        household_scores.setdefault(
+            locality_id,
+            {
+                "overall": 100.0,
+                "price_burden_ratio": 1.0,
+                "fulfillment_ratio": 1.0,
+                **{quartile: 100.0 for quartile in HOUSEHOLD_QUARTILES},
+            },
+        )
+        for bucket_name, bucket in locality_buckets.items():
+            price_burden = _safe_div(bucket["current_cost"], bucket["baseline_cost"])
+            fulfillment = _safe_div(bucket["fulfilled_bbl"], bucket["demand_bbl"])
+            affordability = _clamp(100.0 * fulfillment / max(price_burden, 0.01), 0.0, 125.0)
+            household_scores[locality_id][bucket_name] = affordability
+            if bucket_name == "overall":
+                household_scores[locality_id]["price_burden_ratio"] = price_burden
+                household_scores[locality_id]["fulfillment_ratio"] = fulfillment
+
+    industrial_scores = {
+        locality_id: {
+            "overall": 0.0,
+            "shortage_component": 0.0,
+            "price_component": 0.0,
+            **{sector: 0.0 for sector in SECTORS},
+            **{f"{sector}_shortage_component": 0.0 for sector in SECTORS},
+            **{f"{sector}_price_component": 0.0 for sector in SECTORS},
+        }
+        for locality_id in product_prices
+    }
+    for locality_id, locality_buckets in industrial_buckets.items():
+        industrial_scores.setdefault(
+            locality_id,
+            {
+                "overall": 0.0,
+                "shortage_component": 0.0,
+                "price_component": 0.0,
+                **{sector: 0.0 for sector in SECTORS},
+                **{f"{sector}_shortage_component": 0.0 for sector in SECTORS},
+                **{f"{sector}_price_component": 0.0 for sector in SECTORS},
+            },
+        )
+        for bucket_name, bucket in locality_buckets.items():
+            shortage_component = _clamp(
+                _safe_div(bucket["weighted_unmet_bbl"], bucket["weighted_demand_bbl"]),
+                0.0,
+                1.0,
+            )
+            price_component = _clamp(
+                _safe_div(bucket["weighted_price_drag_bbl"], bucket["weighted_demand_bbl"]),
+                0.0,
+                max(0.0, 1.0 - shortage_component),
+            )
+            output_at_risk = shortage_component + price_component
+            if bucket_name == "overall":
+                industrial_scores[locality_id]["overall"] = output_at_risk
+                industrial_scores[locality_id]["shortage_component"] = shortage_component
+                industrial_scores[locality_id]["price_component"] = price_component
+            else:
+                industrial_scores[locality_id][bucket_name] = output_at_risk
+                industrial_scores[locality_id][f"{bucket_name}_shortage_component"] = shortage_component
+                industrial_scores[locality_id][f"{bucket_name}_price_component"] = price_component
+
+    return household_scores, industrial_scores
 
 
 def _generate_events(
@@ -1196,8 +1464,10 @@ def step_world(
     world: WorldState,
     config: SimulationConfig,
     scenarios: dict[str, ScenarioPreset],
+    military_strategies: dict[str, MilitaryStrategyPreset] | None = None,
 ) -> StepResult:
     scenario = scenarios[config.selected_scenario]
+    strategy = _select_military_strategy(config, military_strategies)
     policy = _effective_policy(config, scenario)
     previous_crude_prices = dict(world.last_crude_price_by_locality)
     previous_shortage_ratio = dict(world.history[-1].locality_shortage_ratio) if world.history else {}
@@ -1306,6 +1576,7 @@ def step_world(
         config,
         policy,
         scenario,
+        strategy,
         effective_routes,
         demand_by_locality_product,
         fulfilled_by_locality_product,
@@ -1317,6 +1588,7 @@ def step_world(
         demand_by_locality_product,
         fulfilled_by_locality_product,
         unmet_by_locality_product,
+        product_auction.agent_product_outcomes,
     )
 
     for locality_id, inventory in world.product_inventory.items():
@@ -1413,7 +1685,11 @@ def step_world(
         "jet_fuel_fulfillment": jet_fuel_fulfillment,
         "diesel_fulfillment": diesel_fulfillment,
     }
-    readiness_index = 100.0 * ((jet_fuel_fulfillment * 0.60) + (diesel_fulfillment * 0.40))
+    readiness_weights = _readiness_product_weights(strategy)
+    readiness_index = 100.0 * (
+        (jet_fuel_fulfillment * readiness_weights["jet"])
+        + (diesel_fulfillment * readiness_weights["diesel"])
+    )
 
     total_shortage = sum(sum(products.values()) for products in unmet_by_locality_product.values())
     total_demand = sum(sum(products.values()) for products in demand_by_locality_product.values())
@@ -1426,6 +1702,12 @@ def step_world(
         scheduled_return.volume_bbl
         for scheduled_return in world.strategic_reserve_pending_returns
     )
+    household_fuel_affordability, industrial_output_at_risk = _calculate_economic_indicators(
+        new_product_prices,
+        product_auction.agent_product_outcomes,
+    )
+    northcom_household = household_fuel_affordability.get("NORTHCOM", {})
+    northcom_industrial = industrial_output_at_risk.get("NORTHCOM", {})
 
     placeholder_result = StepResult(
         week=world.week,
@@ -1446,11 +1728,19 @@ def step_world(
         strategic_reserve_released_bbl=reserve_operation.released_bbl,
         strategic_reserve_purchased_bbl=reserve_operation.purchased_bbl,
         strategic_reserve_returned_bbl=reserve_operation.returned_bbl,
+        household_fuel_affordability=household_fuel_affordability,
+        industrial_output_at_risk=industrial_output_at_risk,
         metrics={
             "total_shortage_bbl": total_shortage,
             "total_demand_bbl": total_demand,
             "global_shortage_ratio": _safe_div(total_shortage, total_demand),
             "average_refinery_utilization": average_refinery_utilization,
+            "northcom_household_fuel_affordability": northcom_household.get("overall", 100.0),
+            "northcom_household_fuel_price_burden": northcom_household.get("price_burden_ratio", 1.0),
+            "northcom_household_fuel_fulfillment": northcom_household.get("fulfillment_ratio", 1.0),
+            "northcom_industrial_output_at_risk": northcom_industrial.get("overall", 0.0),
+            "northcom_industrial_shortage_component": northcom_industrial.get("shortage_component", 0.0),
+            "northcom_industrial_price_component": northcom_industrial.get("price_component", 0.0),
             "jet_fuel_fulfillment": jet_fuel_fulfillment,
             "diesel_fulfillment": diesel_fulfillment,
             "aviation_jet_fulfillment": strategic_jet_fulfillment,
@@ -1463,6 +1753,8 @@ def step_world(
             "military_diesel_fulfillment": military_diesel_fulfillment,
             "strategic_market_jet_fulfillment": strategic_jet_fulfillment,
             "strategic_market_diesel_fulfillment": strategic_diesel_fulfillment,
+            "readiness_jet_weight": readiness_weights["jet"],
+            "readiness_diesel_weight": readiness_weights["diesel"],
             "spr_inventory_bbl": world.strategic_reserve_inventory_bbl,
             "spr_capacity_ratio": strategic_reserve_capacity_ratio,
             "spr_market_value_usd": strategic_reserve_market_value_usd,
@@ -1498,8 +1790,9 @@ def run_n_steps(
     config: SimulationConfig,
     scenarios: dict[str, ScenarioPreset],
     steps: int,
+    military_strategies: dict[str, MilitaryStrategyPreset] | None = None,
 ) -> list[StepResult]:
     results: list[StepResult] = []
     for _ in range(steps):
-        results.append(step_world(world, config, scenarios))
+        results.append(step_world(world, config, scenarios, military_strategies))
     return results
