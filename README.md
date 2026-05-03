@@ -1,5 +1,46 @@
 # Introducing Overpower, an Agent Based Model of the Fossil Fuel Supply chain
 
+## MVP Status
+This repository now includes a runnable MVP built for a 10-hour hackathon sprint:
+
+- A deterministic weekly simulation engine in `src/overpower/`
+- A Streamlit dashboard in `app.py`
+- Scenario presets for Hormuz pressure, CIS disruption, Venezuela outage, and policy mitigation
+- Route override controls, event logging, refinery rankings, shortage heatmaps, and a Strategic Readiness Index
+
+The MVP uses 50 crude producer agents, 50 refinery agents, 45 sector demand agents, and 36 household demand agents across 9 command-aligned localities.
+
+## Quick Start
+1. Install dependencies:
+   ```bash
+   python3 -m pip install -r requirements.txt
+   ```
+2. Launch the dashboard:
+   ```bash
+   streamlit run app.py
+   ```
+3. Run the regression suite:
+   ```bash
+   python3 -m unittest discover -s tests -v
+   ```
+
+If `plotly` is not installed yet, the app still runs with Streamlit-native charts.
+
+## 60-Second Demo Flow
+1. Start in `Baseline` and click `Run 4 Weeks`.
+2. Note the `Strategic Readiness`, `Global Shortage`, and `Avg Crude Price` cards.
+3. Switch to `Hormuz Squeeze`, hit `Reset World`, then `Run 4 Weeks`.
+4. Watch blocked lanes on the route graph, rising crude prices, and the event log.
+5. Add a reserve release and refinery subsidy, then run 4 more weeks to compare mitigation outcomes.
+
+## MVP Design Notes
+- Canonical nodes come from `src/raw-input-data/core-data.csv`.
+- Crude agents and refinery agents are loaded from the cleaned 50-agent rollups and scaled to locality-level baseline totals.
+- Governments and capital allocators are represented as policy controls, not autonomous agents.
+- Crude shipments respect route latency and queue into future weeks.
+- Product allocation clears within the current step, with route blockades and shipping costs still affecting who gets served.
+- The readiness metric is weighted toward jet and diesel fulfillment in operationally important localities.
+
 ## I. Executive Summary
 America's national energy security is currently modeled using 20th-century econometric tools that prioritize smoothed averages of rational homogenous agents over the gritty complex and chaotic reality of supply chains. 
 Overpower is a high-fidelity Agent-Based Model (ABM) designed to simulate the micro-decisions of every major firm in the fossil fuel supply chain and create a testing lab for economic strategy. 
