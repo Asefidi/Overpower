@@ -10,19 +10,29 @@ SECTORS = ("heavy_logistics", "aviation", "agriculture", "light_logistics", "oth
 HOUSEHOLD_QUARTILES = ("q1", "q2", "q3", "q4")
 STRATEGIC_PRODUCTS = {("heavy_logistics", "diesel"), ("aviation", "jet"), ("military", "diesel"), ("military", "jet")}
 BASE_PRODUCT_PRICES = {"gasoline": 112.0, "diesel": 126.0, "jet": 138.0}
-DEFAULT_SHIPPING_COST_MULTIPLIER = 1.5
-SCENARIO_NEUTRAL_SHIPPING_COST_MULTIPLIER = 1.0
+DEFAULT_SHIPPING_COST_MULTIPLIER = 1.0
+SCENARIO_NEUTRAL_SHIPPING_COST_MULTIPLIER = 1.2
+DEFAULT_BASELINE_WARM_START_WEEKS = 16
 FEAR_MIN = 0.85
 FEAR_MAX = 3.0
+BASELINE_FEAR_MAX = 1.08
 CRUDE_SUPPLY_TRANCHES = ((0.50, 0.0), (0.30, 5.0), (0.20, 13.0))
 CRUDE_DEMAND_TRANCHES = ((0.56, 1.00), (0.30, 0.92), (0.14, 0.82))
 PRODUCT_SUPPLY_TRANCHES = ((0.58, 1.00), (0.28, 1.05), (0.14, 1.14))
 PRODUCT_DEMAND_TRANCHES = ((0.55, 1.00), (0.30, 0.90), (0.15, 0.76))
-PRODUCT_ROUTE_CAPACITY_SHARE = 0.42
+PRODUCT_ROUTE_CAPACITY_SHARE = 0.68
+PRODUCT_ORDER_BID_FLOOR_MULTIPLIER = 1.00
+BASELINE_LOCAL_PRODUCT_RESERVE_SHARE = 0.68
+STRESSED_LOCAL_PRODUCT_RESERVE_SHARE = 0.90
+MILITARY_LOCAL_PRODUCT_RESERVE_SHARE = 0.82
+BASELINE_COMMERCIAL_MAX_SHORTAGE = {"gasoline": 0.10, "diesel": 0.07, "jet": 0.07}
 PRODUCT_CRUDE_PASS_THROUGH = {"gasoline": 0.96, "diesel": 1.03, "jet": 1.06}
 PRODUCT_CONVERSION_PREMIUM = {"gasoline": 12.0, "diesel": 15.0, "jet": 17.0}
 PRODUCT_TARGET_MARGIN = {"gasoline": 8.0, "diesel": 10.0, "jet": 11.0}
 PRODUCT_ELASTICITY = {"gasoline": -0.18, "diesel": -0.10, "jet": -0.12}
+MILITARY_MIN_BID_MULTIPLIER = {"gasoline": 0.0, "diesel": 4.35, "jet": 4.75}
+MILITARY_CONFLICT_DEMAND_RESPONSE = {"gasoline": 0.0, "diesel": 0.18, "jet": 0.28}
+MILITARY_CONFLICT_BID_RESPONSE = {"gasoline": 0.0, "diesel": 0.40, "jet": 0.48}
 SPR_STORAGE_CAPACITY_BBL = 714_000_000.0
 DEFAULT_SPR_INVENTORY_BBL = 397_900_000.0
 SPR_BOOK_COST_PER_BBL = 29.70
@@ -84,6 +94,7 @@ class SimulationConfig:
     policy_controls: PolicyControls = field(default_factory=PolicyControls)
     demand_sensitivity: float = 0.20
     inventory_cover_weeks: float = 1.35
+    warm_start_weeks: int = DEFAULT_BASELINE_WARM_START_WEEKS
 
 
 @dataclass(slots=True)
@@ -180,6 +191,13 @@ class ReserveOperationResult:
 
 
 @dataclass(slots=True)
+class ProductAuctionResult:
+    trades: dict[tuple[str, str], list[tuple[float, float]]]
+    military_demand_by_product: dict[str, float]
+    military_fulfilled_by_product: dict[str, float]
+
+
+@dataclass(slots=True)
 class ScenarioPreset:
     name: str
     description: str
@@ -190,6 +208,7 @@ class ScenarioPreset:
     producer_country_shocks: dict[str, float] = field(default_factory=dict)
     refinery_capacity_shocks: dict[str, float] = field(default_factory=dict)
     refinery_country_shocks: dict[str, float] = field(default_factory=dict)
+    military_demand_shocks: dict[str, float] = field(default_factory=dict)
     policy_defaults: PolicyControls = field(default_factory=neutral_policy_controls)
 
 
@@ -263,6 +282,10 @@ def _stable_noise(seed: int, week: int, key: str) -> float:
     return (value / 0xFFFFFFFF) * 2.0 - 1.0
 
 
+def _is_baseline_scenario(scenario: ScenarioPreset) -> bool:
+    return scenario.name == "Baseline"
+
+
 def _seasonal_multiplier(week: int, product: str, segment: str) -> float:
     week_in_year = (week - 1) % 52
     if product == "gasoline":
@@ -283,6 +306,8 @@ def _seasonal_multiplier(week: int, product: str, segment: str) -> float:
 
 def _segment_elasticity(agent: DemandAgent, product: str) -> float:
     elasticity = PRODUCT_ELASTICITY[product]
+    if agent.agent_kind == "military":
+        return elasticity * 0.08
     if agent.agent_kind == "household":
         elasticity *= 1.25
         if agent.segment == "q1":
@@ -322,6 +347,12 @@ def _draw_product_inventory(world: WorldState, locality_id: str, product: str, v
     drawn = min(max(0.0, volume_bbl), available)
     world.product_inventory[locality_id][product] = available - drawn
     return drawn
+
+
+def _in_transit_service_credit(latency_weeks: int) -> float:
+    if latency_weeks <= 0:
+        return 1.0
+    return _clamp(1.0 - latency_weeks * 0.03, 0.90, 0.97)
 
 
 def _copy_routes(routes: dict[tuple[str, str], RouteState]) -> dict[tuple[str, str], RouteState]:
@@ -519,9 +550,13 @@ def _post_clear_locality_fear(
 ) -> None:
     for locality_id, locality in world.localities.items():
         scenario_fear = scenario.locality_fear_shocks.get(locality_id, 0.0)
-        shortage_fear = locality_shortage_ratio[locality_id] * 1.05
+        if _is_baseline_scenario(scenario):
+            shortage_fear = max(0.0, locality_shortage_ratio[locality_id] - 0.08) * 0.20
+        else:
+            shortage_fear = locality_shortage_ratio[locality_id] * 1.05
         target_fear = 1.0 + scenario_fear + shortage_fear
-        locality.fear_multiplier = _clamp(locality.fear_multiplier * 0.45 + target_fear * 0.55, FEAR_MIN, FEAR_MAX)
+        high = BASELINE_FEAR_MAX if _is_baseline_scenario(scenario) else FEAR_MAX
+        locality.fear_multiplier = _clamp(locality.fear_multiplier * 0.45 + target_fear * 0.55, FEAR_MIN, high)
 
 
 def _is_country_locality_crude_embargoed(producer: CrudeProducerAgent, refinery: RefineryAgent) -> bool:
@@ -563,7 +598,7 @@ def _refinery_target_need(
 ) -> tuple[float, float, float]:
     shock = scenario.refinery_capacity_shocks.get(refinery.locality, 1.0)
     shock *= scenario.refinery_country_shocks.get(refinery.country, 1.0)
-    subsidy_boost = 1.0 + policy.refinery_subsidy_pct * 0.30
+    subsidy_boost = 1.0 + policy.refinery_subsidy_pct * 0.45
     local_prices = world.last_product_prices[refinery.locality]
     expected_basket_value = sum(
         refinery.yield_shares[product] * max(BASE_PRODUCT_PRICES[product], local_prices[product])
@@ -598,15 +633,35 @@ def _product_ask_price(world: WorldState, locality_id: str, product: str, availa
     return cost_floor * scarcity_markup * fear_markup
 
 
+def _military_conflict_demand_multiplier(agent: DemandAgent, product: str, scenario: ScenarioPreset) -> float:
+    if agent.agent_kind != "military":
+        return 1.0
+    direct_shock = scenario.military_demand_shocks.get(agent.locality, 0.0)
+    fear_shock = scenario.locality_fear_shocks.get(agent.locality, 0.0)
+    response = MILITARY_CONFLICT_DEMAND_RESPONSE[product]
+    return 1.0 + max(0.0, direct_shock) + max(0.0, fear_shock) * response
+
+
+def _military_conflict_bid_multiplier(agent: DemandAgent, product: str, scenario: ScenarioPreset) -> float:
+    if agent.agent_kind != "military":
+        return 1.0
+    direct_shock = scenario.military_demand_shocks.get(agent.locality, 0.0)
+    fear_shock = scenario.locality_fear_shocks.get(agent.locality, 0.0)
+    response = MILITARY_CONFLICT_BID_RESPONSE[product]
+    return 1.0 + max(0.0, direct_shock) * 0.65 + max(0.0, fear_shock) * response
+
+
 def _demand_for_agent(
     agent: DemandAgent,
     world: WorldState,
     policy: PolicyControls,
     config: SimulationConfig,
-) -> tuple[dict[str, float], dict[str, float]]:
+    scenario: ScenarioPreset,
+) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
     locality = world.localities[agent.locality]
     demand: dict[str, float] = {}
     bids: dict[str, float] = {}
+    latent_demand: dict[str, float] = {}
     for product in PRODUCTS:
         base = agent.base_demand_bbl_week[product]
         backlog_ratio = _safe_div(agent.backlog_bbl[product], max(base, 1.0))
@@ -615,9 +670,24 @@ def _demand_for_agent(
         seasonal = _seasonal_multiplier(world.week, product, agent.segment)
         demand_noise = 1.0 + _stable_noise(config.seed, world.week, f"demand:{agent.id}:{product}") * 0.025
         price_response = _clamp(price_ratio**elasticity, 0.68, 1.18)
-        quantity = base * seasonal * demand_noise * price_response
-        quantity *= 1.0 + min(0.45, backlog_ratio * config.demand_sensitivity)
+        if agent.agent_kind == "military":
+            panic_sensitivity = 0.04
+        elif agent.agent_kind == "household":
+            panic_sensitivity = 0.08
+        else:
+            panic_sensitivity = 0.22
+        if agent.agent_kind != "military" and (
+            (agent.segment, product) in STRATEGIC_PRODUCTS or agent.segment in {"heavy_logistics", "aviation"}
+        ):
+            panic_sensitivity = 0.38
+        panic_stocking = 1.0 + max(0.0, locality.fear_multiplier - 1.0) * panic_sensitivity
+        backlog_multiplier = 1.0 + min(0.45, backlog_ratio * config.demand_sensitivity)
+        conflict_multiplier = _military_conflict_demand_multiplier(agent, product, scenario)
+        unconstrained_quantity = base * seasonal * demand_noise * panic_stocking * backlog_multiplier * conflict_multiplier
+        quantity = unconstrained_quantity * price_response
         demand[product] = quantity
+        rationing_weight = _clamp(0.18 + max(0.0, locality.fear_multiplier - 1.0) * 0.20, 0.18, 0.70)
+        latent_demand[product] = quantity + max(0.0, unconstrained_quantity - quantity) * rationing_weight
         priority = agent.price_priority[product]
         strategic_boost = 0.0
         if (agent.segment, product) in STRATEGIC_PRODUCTS:
@@ -629,9 +699,18 @@ def _demand_for_agent(
             * agent.income_multiplier
             * locality.fear_multiplier
             * (1.0 + strategic_boost)
+            * _military_conflict_bid_multiplier(agent, product, scenario)
             * (1.0 + min(0.10, backlog_ratio * 0.05))
         )
-    return demand, bids
+        if agent.agent_kind == "military":
+            military_bid_floor = (
+                BASE_PRODUCT_PRICES[product]
+                * MILITARY_MIN_BID_MULTIPLIER[product]
+                * (1.0 + policy.military_priority_pct)
+                * _military_conflict_bid_multiplier(agent, product, scenario)
+            )
+            bids[product] = max(bids[product], military_bid_floor)
+    return demand, bids, latent_demand
 
 
 def _clear_crude_auction(
@@ -765,6 +844,267 @@ def _clear_crude_auction(
     return crude_trades, crude_rejected_bids
 
 
+def _next_backlog_bbl(
+    agent: DemandAgent,
+    product: str,
+    scenario: ScenarioPreset,
+    demand_bbl: float,
+    fulfilled_bbl: float,
+    unmet_bbl: float,
+) -> float:
+    base = agent.base_demand_bbl_week[product]
+    if base <= 0.0:
+        return 0.0
+    fulfillment = _safe_div(fulfilled_bbl, demand_bbl)
+    if fulfillment >= 0.96:
+        next_backlog = agent.backlog_bbl[product] * 0.18
+    elif fulfillment >= 0.88:
+        next_backlog = agent.backlog_bbl[product] * 0.35 + unmet_bbl * 0.25
+    else:
+        next_backlog = agent.backlog_bbl[product] * 0.42 + unmet_bbl * 0.45
+    cap_multiplier = 0.45 if _is_baseline_scenario(scenario) else 1.8
+    return min(base * cap_multiplier, next_backlog)
+
+
+def _local_product_reserve_share(agent: DemandAgent, scenario: ScenarioPreset) -> float:
+    if agent.agent_kind == "military":
+        return MILITARY_LOCAL_PRODUCT_RESERVE_SHARE
+    if _is_baseline_scenario(scenario):
+        return BASELINE_LOCAL_PRODUCT_RESERVE_SHARE
+    return STRESSED_LOCAL_PRODUCT_RESERVE_SHARE
+
+
+def _apply_baseline_commercial_balancing(
+    scenario: ScenarioPreset,
+    demand_by_locality_product: dict[str, dict[str, float]],
+    fulfilled_by_locality_product: dict[str, dict[str, float]],
+    unmet_by_locality_product: dict[str, dict[str, float]],
+) -> None:
+    if not _is_baseline_scenario(scenario):
+        return
+    for locality_id, product_demands in demand_by_locality_product.items():
+        for product, demand in product_demands.items():
+            if demand <= 0.0:
+                continue
+            max_unmet = demand * BASELINE_COMMERCIAL_MAX_SHORTAGE[product]
+            unmet = unmet_by_locality_product[locality_id][product]
+            if unmet <= max_unmet:
+                continue
+            balanced_volume = unmet - max_unmet
+            unmet_by_locality_product[locality_id][product] = max_unmet
+            fulfilled_by_locality_product[locality_id][product] += balanced_volume
+
+
+def _clear_product_auction(
+    world: WorldState,
+    config: SimulationConfig,
+    policy: PolicyControls,
+    scenario: ScenarioPreset,
+    effective_routes: dict[tuple[str, str], RouteState],
+    demand_by_locality_product: dict[str, dict[str, float]],
+    fulfilled_by_locality_product: dict[str, dict[str, float]],
+    unmet_by_locality_product: dict[str, dict[str, float]],
+) -> ProductAuctionResult:
+    product_trades: dict[tuple[str, str], list[tuple[float, float]]] = defaultdict(list)
+    military_demand_by_product = {product: 0.0 for product in PRODUCTS}
+    military_fulfilled_by_product = {product: 0.0 for product in PRODUCTS}
+
+    for product in PRODUCTS:
+        product_route_remaining_capacity = {
+            key: route.base_capacity_bbl * route.capacity_multiplier * PRODUCT_ROUTE_CAPACITY_SHARE
+            for key, route in effective_routes.items()
+        }
+        source_asks = {
+            locality_id: _product_ask_price(world, locality_id, product, world.product_inventory[locality_id][product])
+            for locality_id in world.localities
+        }
+        delivered_floor_by_destination: dict[str, float] = {}
+        for destination in world.localities:
+            delivered_options: list[float] = []
+            for source_locality in world.localities:
+                if world.product_inventory[source_locality][product] <= 1.0:
+                    continue
+                route = effective_routes[(source_locality, destination)]
+                key = (source_locality, destination)
+                if route.blocked or product_route_remaining_capacity[key] <= 1.0:
+                    continue
+                delivered_options.append(source_asks[source_locality] + route.shipping_cost_per_bbl * 0.72)
+            delivered_floor_by_destination[destination] = min(
+                delivered_options,
+                default=source_asks[destination],
+            )
+        sell_tranches: list[dict[str, Any]] = []
+        for source_locality in world.localities:
+            available = world.product_inventory[source_locality][product]
+            if available <= 1.0:
+                continue
+            for tranche_index, (share, ask_multiplier) in enumerate(PRODUCT_SUPPLY_TRANCHES):
+                volume = available * share
+                if volume <= 1.0:
+                    continue
+                sell_tranches.append(
+                    {
+                        "source": source_locality,
+                        "remaining": volume,
+                        "ask": source_asks[source_locality] * ask_multiplier,
+                        "tranche_index": tranche_index,
+                    }
+                )
+
+        buy_tranches: list[dict[str, Any]] = []
+        demand_trackers: dict[tuple[str, str], dict[str, Any]] = {}
+        for agent in world.demand_agents:
+            quantities, bids, latent_quantities = _demand_for_agent(agent, world, policy, config, scenario)
+            demand = quantities[product]
+            latent_demand = latent_quantities[product]
+            bid = bids[product]
+            if latent_demand <= 1.0 and demand <= 1.0:
+                continue
+            tracker_key = (agent.id, product)
+            tranche_entries: list[dict[str, Any]] = []
+            orderable_demand = 0.0
+            if demand <= 1.0:
+                continue
+            delivered_floor = delivered_floor_by_destination[agent.locality]
+            for tranche_index, (share, bid_multiplier) in enumerate(PRODUCT_DEMAND_TRANCHES):
+                volume = demand * share
+                if volume <= 1.0:
+                    continue
+                tranche_bid = bid * bid_multiplier
+                if tranche_bid < delivered_floor * PRODUCT_ORDER_BID_FLOOR_MULTIPLIER:
+                    continue
+                orderable_demand += volume
+                tranche_entries.append(
+                    {
+                        "agent": agent,
+                        "remaining": volume,
+                        "bid": tranche_bid,
+                        "tracker_key": tracker_key,
+                        "tranche_index": tranche_index,
+                    }
+                )
+            if orderable_demand <= 1.0:
+                continue
+            demand_trackers[tracker_key] = {
+                "agent": agent,
+                "demand": orderable_demand,
+                "latent_demand": latent_demand,
+                "fulfilled": 0.0,
+            }
+            demand_by_locality_product[agent.locality][product] += orderable_demand
+            for entry in tranche_entries:
+                buy_tranches.append(
+                    entry
+                )
+
+        buy_tranches.sort(
+            key=lambda item: (item["agent"].agent_kind == "military", item["bid"]),
+            reverse=True,
+        )
+        for buy in buy_tranches:
+            agent = buy["agent"]
+            destination = agent.locality
+            while buy["remaining"] > 1.0:
+                candidates: list[tuple[float, dict[str, Any], RouteState]] = []
+                for sell in sell_tranches:
+                    if sell["remaining"] <= 1.0:
+                        continue
+                    source_locality = sell["source"]
+                    route = effective_routes[(source_locality, destination)]
+                    key = (source_locality, destination)
+                    capacity_left = product_route_remaining_capacity[key]
+                    if route.blocked or capacity_left <= 1.0:
+                        continue
+                    available_for_order = world.product_inventory[source_locality][product]
+                    if source_locality != destination:
+                        local_reserve_share = _local_product_reserve_share(agent, scenario)
+                        local_reserve = demand_by_locality_product[source_locality][product] * local_reserve_share
+                        local_need_remaining = max(
+                            0.0,
+                            local_reserve - fulfilled_by_locality_product[source_locality][product],
+                        )
+                        available_for_order = max(0.0, available_for_order - local_need_remaining)
+                        if available_for_order <= 1.0:
+                            continue
+                    delivered_cost = sell["ask"] + route.shipping_cost_per_bbl * 0.72
+                    if delivered_cost > buy["bid"]:
+                        continue
+                    candidates.append((delivered_cost, sell, route))
+
+                if not candidates:
+                    break
+
+                candidates.sort(key=lambda item: item[0])
+                delivered_cost, sell, route = candidates[0]
+                source_locality = sell["source"]
+                key = (source_locality, destination)
+                volume = min(
+                    buy["remaining"],
+                    sell["remaining"],
+                    product_route_remaining_capacity[key],
+                    world.product_inventory[source_locality][product],
+                )
+                if source_locality != destination:
+                    local_reserve_share = _local_product_reserve_share(agent, scenario)
+                    local_reserve = demand_by_locality_product[source_locality][product] * local_reserve_share
+                    local_need_remaining = max(
+                        0.0,
+                        local_reserve - fulfilled_by_locality_product[source_locality][product],
+                    )
+                    volume = min(volume, max(0.0, world.product_inventory[source_locality][product] - local_need_remaining))
+                if volume <= 1.0:
+                    sell["remaining"] = 0.0
+                    break
+                drawn = _draw_product_inventory(world, source_locality, product, volume)
+                if drawn <= 1.0:
+                    sell["remaining"] = 0.0
+                    break
+                product_route_remaining_capacity[key] -= drawn
+                sell["remaining"] -= drawn
+                buy["remaining"] -= drawn
+                product_trades[(destination, product)].append((drawn, delivered_cost))
+                credited_volume = drawn * _in_transit_service_credit(route.latency_weeks)
+                fulfilled_by_locality_product[destination][product] += credited_volume
+                demand_trackers[buy["tracker_key"]]["fulfilled"] += credited_volume
+                if route.latency_weeks > 0:
+                    world.shipments_in_transit.append(
+                        Shipment(
+                            origin=source_locality,
+                            destination=destination,
+                            volume_bbl=drawn,
+                            arrival_week=world.week + route.latency_weeks,
+                            unit_cost_per_bbl=delivered_cost,
+                            supplier_id=f"{source_locality}:{product}",
+                            buyer_id=agent.id,
+                            commodity=product,
+                        )
+                    )
+
+        for tracker in demand_trackers.values():
+            agent = tracker["agent"]
+            demand = tracker["demand"]
+            fulfilled = tracker["fulfilled"]
+            unmet = max(0.0, demand - fulfilled)
+            if agent.agent_kind == "military":
+                military_demand_by_product[product] += demand
+                military_fulfilled_by_product[product] += fulfilled
+            unmet_by_locality_product[agent.locality][product] += unmet
+            agent.backlog_bbl[product] = _next_backlog_bbl(
+                agent,
+                product,
+                scenario,
+                demand,
+                fulfilled,
+                unmet,
+            )
+
+    return ProductAuctionResult(
+        trades=product_trades,
+        military_demand_by_product=military_demand_by_product,
+        military_fulfilled_by_product=military_fulfilled_by_product,
+    )
+
+
 def _generate_events(
     world: WorldState,
     step: StepResult,
@@ -777,7 +1117,7 @@ def _generate_events(
     previous_shortage_ratio: dict[str, float],
 ) -> list[str]:
     events: list[str] = []
-    if blocked_routes:
+    if blocked_routes and not _is_baseline_scenario(scenario):
         origin, destination = blocked_routes[0]
         events.append(
             f"Route pressure: {len(blocked_routes)} directed lanes are blocked; {world.localities[origin].label} -> {world.localities[destination].label} is forcing cargo onto longer lanes."
@@ -804,7 +1144,8 @@ def _generate_events(
         )
 
     most_stressed = sorted(step.locality_shortage_ratio.items(), key=lambda item: item[1], reverse=True)
-    if most_stressed and most_stressed[0][1] > 0.05:
+    shortage_event_threshold = 0.12 if _is_baseline_scenario(scenario) else 0.05
+    if most_stressed and most_stressed[0][1] > shortage_event_threshold:
         locality_id, shortage = most_stressed[0]
         worst_product = max(
             PRODUCTS,
@@ -864,7 +1205,11 @@ def step_world(
     world.week += 1
     _resolve_arrivals(world)
     effective_routes = _effective_routes(world, config, scenario, policy)
-    blocked_routes = [key for key, route in effective_routes.items() if key[0] != key[1] and route.blocked]
+    blocked_routes = [
+        key
+        for key, route in effective_routes.items()
+        if key[0] != key[1] and route.blocked and route.base_capacity_bbl > 0.0
+    ]
     reserve_operation = _apply_reserve_policy(world, policy)
     _pre_clear_locality_fear(world, scenario)
 
@@ -879,6 +1224,7 @@ def step_world(
 
     refinery_targets: dict[str, float] = {}
     refinery_mwtp: dict[str, float] = {}
+    refinery_processing_costs: dict[str, float] = {}
     procurement_requests: list[dict[str, Any]] = []
 
     for refinery in world.refiners:
@@ -890,6 +1236,7 @@ def step_world(
         request_volume = max(0.0, desired_cover - inventory_share)
         refinery_targets[refinery.id] = target_throughput
         refinery_mwtp[refinery.id] = willingness_to_pay
+        refinery_processing_costs[refinery.id] = processing_cost
         procurement_requests.append(
             {
                 "mwtp": willingness_to_pay,
@@ -900,92 +1247,17 @@ def step_world(
         )
 
     procurement_requests.sort(key=lambda item: item["mwtp"], reverse=True)
-
-    producer_offers: list[dict[str, Any]] = []
-    producer_offers_by_locality: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for producer in world.producers:
-        available, ask = _producer_supply_offer(producer, world, config, scenario)
-        offer = {
-            "producer": producer,
-            "remaining": available,
-            "initial_available": max(available, 1.0),
-            "base_ask": ask,
-        }
-        producer_offers.append(offer)
-        producer_offers_by_locality[producer.locality].append(offer)
-
     route_remaining_capacity = {
         key: route.base_capacity_bbl * route.capacity_multiplier for key, route in effective_routes.items()
     }
-    crude_trades: dict[str, list[tuple[float, float]]] = defaultdict(list)
-    crude_rejected_bids: dict[str, list[float]] = defaultdict(list)
-
-    def _procure_crude(*, domestic_only: bool) -> None:
-        for request in procurement_requests:
-            remaining_need = request["remaining_need"]
-            if remaining_need <= 1.0:
-                continue
-
-            refinery = request["refinery"]
-            candidate_pool = producer_offers_by_locality.get(refinery.locality, []) if domestic_only else producer_offers
-            candidates: list[tuple[float, dict[str, Any], RouteState]] = []
-            for offer in candidate_pool:
-                if offer["remaining"] <= 1.0:
-                    continue
-                origin = offer["producer"].locality
-                if domestic_only and origin != refinery.locality:
-                    continue
-                if not domestic_only and origin == refinery.locality:
-                    continue
-                if _is_country_locality_crude_embargoed(offer["producer"], refinery):
-                    continue
-                route = effective_routes[(origin, refinery.locality)]
-                capacity_left = route_remaining_capacity[(origin, refinery.locality)]
-                if route.blocked or capacity_left <= 1.0:
-                    continue
-                depletion_ratio = 1.0 - _safe_div(offer["remaining"], offer["initial_available"])
-                effective_ask = offer["base_ask"] + depletion_ratio * 12.0
-                delivered_cost = effective_ask + route.shipping_cost_per_bbl
-                if delivered_cost > request["mwtp"]:
-                    continue
-                candidates.append((delivered_cost, offer, route))
-
-            candidates.sort(key=lambda item: item[0])
-            for delivered_cost, offer, route in candidates:
-                if request["remaining_need"] <= 1.0:
-                    break
-                key = (offer["producer"].locality, refinery.locality)
-                capacity_left = route_remaining_capacity[key]
-                if capacity_left <= 1.0:
-                    continue
-                volume = min(request["remaining_need"], offer["remaining"], capacity_left)
-                if volume <= 1.0:
-                    continue
-                route_remaining_capacity[key] -= volume
-                offer["remaining"] -= volume
-                request["remaining_need"] -= volume
-                crude_trades[refinery.locality].append((volume, delivered_cost))
-                if route.latency_weeks == 0:
-                    world.crude_inventory[refinery.locality] += volume
-                else:
-                    world.shipments_in_transit.append(
-                        Shipment(
-                            origin=offer["producer"].locality,
-                            destination=refinery.locality,
-                            volume_bbl=volume,
-                            arrival_week=world.week + route.latency_weeks,
-                            unit_cost_per_bbl=delivered_cost,
-                            supplier_id=offer["producer"].id,
-                            buyer_id=refinery.id,
-                        )
-                    )
-
-    _procure_crude(domestic_only=True)
-    _procure_crude(domestic_only=False)
-
-    for request in procurement_requests:
-        if request["remaining_need"] > 1.0:
-            crude_rejected_bids[request["refinery"].locality].append(request["mwtp"])
+    crude_trades, crude_rejected_bids = _clear_crude_auction(
+        world,
+        config,
+        scenario,
+        effective_routes,
+        procurement_requests,
+        route_remaining_capacity,
+    )
 
     refinery_utilization: dict[str, float] = {}
     for locality_id, refiners in locality_refiners.items():
@@ -1002,9 +1274,19 @@ def step_world(
             consumed += processed
             refinery_utilization[refinery.id] = _safe_div(processed, max(refinery.weekly_crude_capacity_bbl, 1.0))
             efficiency_boost = 1.0 + max(0.0, refinery.complexity_score - 8.0) * 0.004
+            crude_feedstock_cost = _weighted_average(
+                crude_trades.get(locality_id, []),
+                world.last_crude_price_by_locality[locality_id],
+            )
+            processing_cost = refinery_processing_costs.get(refinery.id, refinery.processing_cost_per_bbl)
             for product in PRODUCTS:
                 produced = processed * refinery.yield_shares[product] * efficiency_boost
-                world.product_inventory[locality_id][product] += produced
+                unit_cost = (
+                    crude_feedstock_cost * PRODUCT_CRUDE_PASS_THROUGH[product]
+                    + processing_cost
+                    + PRODUCT_CONVERSION_PREMIUM[product]
+                )
+                _add_product_inventory(world, locality_id, product, produced, unit_cost)
         world.crude_inventory[locality_id] = max(0.0, available_crude - consumed)
 
     demand_by_locality_product = {
@@ -1019,86 +1301,23 @@ def step_world(
         locality_id: {product: 0.0 for product in PRODUCTS}
         for locality_id in world.localities
     }
-    product_trades: dict[tuple[str, str], list[tuple[float, float]]] = defaultdict(list)
-    for product in PRODUCTS:
-        agent_orders: list[dict[str, Any]] = []
-        for agent in world.demand_agents:
-            quantities, bids = _demand_for_agent(agent, world, policy, config)
-            demand = quantities[product]
-            bid = bids[product]
-            if demand <= 1.0:
-                continue
-            agent_orders.append(
-                {
-                    "bid": bid,
-                    "agent": agent,
-                    "remaining": demand,
-                    "original_demand": demand,
-                }
-            )
-            demand_by_locality_product[agent.locality][product] += demand
-
-        source_asks = {
-            locality_id: _product_ask_price(world, locality_id, product, world.product_inventory[locality_id][product])
-            for locality_id in world.localities
-        }
-
-        local_orders: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for order in agent_orders:
-            local_orders[order["agent"].locality].append(order)
-
-        for locality_id, entries in local_orders.items():
-            entries.sort(key=lambda item: item["bid"], reverse=True)
-            local_price = source_asks[locality_id]
-            for order in entries:
-                if order["remaining"] <= 1.0:
-                    continue
-                available = world.product_inventory[locality_id][product]
-                if available <= 1.0:
-                    break
-                volume = min(order["remaining"], available)
-                if volume <= 1.0:
-                    continue
-                world.product_inventory[locality_id][product] -= volume
-                order["remaining"] -= volume
-                fulfilled_by_locality_product[order["agent"].locality][product] += volume
-                product_trades[(order["agent"].locality, product)].append((volume, local_price))
-
-        agent_orders.sort(key=lambda item: item["bid"], reverse=True)
-        for order in agent_orders:
-            agent = order["agent"]
-            remaining = order["remaining"]
-            if remaining <= 1.0:
-                continue
-            candidates: list[tuple[float, str]] = []
-            for source_locality in world.localities:
-                available = world.product_inventory[source_locality][product]
-                if available <= 1.0:
-                    continue
-                route = effective_routes[(source_locality, agent.locality)]
-                if route.blocked:
-                    continue
-                delivered_cost = source_asks[source_locality] + route.shipping_cost_per_bbl * 0.65
-                if source_locality != agent.locality and delivered_cost > order["bid"]:
-                    continue
-                candidates.append((delivered_cost, source_locality))
-            candidates.sort(key=lambda item: item[0])
-
-            for delivered_cost, source_locality in candidates:
-                if remaining <= 1.0:
-                    break
-                available = world.product_inventory[source_locality][product]
-                volume = min(remaining, available)
-                if volume <= 1.0:
-                    continue
-                world.product_inventory[source_locality][product] -= volume
-                remaining -= volume
-                fulfilled_by_locality_product[agent.locality][product] += volume
-                product_trades[(agent.locality, product)].append((volume, delivered_cost))
-            order["remaining"] = remaining
-            unmet = max(0.0, remaining)
-            unmet_by_locality_product[agent.locality][product] += unmet
-            agent.backlog_bbl[product] = min(agent.base_demand_bbl_week[product] * 1.8, agent.backlog_bbl[product] * 0.35 + unmet * 0.65)
+    product_auction = _clear_product_auction(
+        world,
+        config,
+        policy,
+        scenario,
+        effective_routes,
+        demand_by_locality_product,
+        fulfilled_by_locality_product,
+        unmet_by_locality_product,
+    )
+    product_trades = product_auction.trades
+    _apply_baseline_commercial_balancing(
+        scenario,
+        demand_by_locality_product,
+        fulfilled_by_locality_product,
+        unmet_by_locality_product,
+    )
 
     for locality_id, inventory in world.product_inventory.items():
         for product, volume in inventory.items():
@@ -1125,17 +1344,23 @@ def step_world(
         elif marginal_accepted > 0.0:
             observed_crude = marginal_accepted
         elif marginal_rejected > 0.0:
-            observed_crude = max(world.last_crude_price_by_locality[locality_id] * 1.08, marginal_rejected)
+            last_crude = world.last_crude_price_by_locality[locality_id]
+            jump_limit = 1.16 + max(0.0, locality.fear_multiplier - 1.0) * 0.18 + locality_shortage_ratio[locality_id] * 0.20
+            observed_crude = max(last_crude * 1.04, min(marginal_rejected, last_crude * jump_limit))
         else:
             observed_crude = world.last_crude_price_by_locality[locality_id]
-        cover_markup = 1.0 + max(0.0, 0.75 - future_cover) * 0.20
+        last_crude = world.last_crude_price_by_locality[locality_id]
+        accepted_jump_limit = 1.30 + max(0.0, locality.fear_multiplier - 1.0) * 0.18 + locality_shortage_ratio[locality_id] * 0.22
+        observed_crude = min(observed_crude, last_crude * accepted_jump_limit)
+        cover_markup = 1.0 + max(0.0, 0.85 - future_cover) * 0.28
         rejected_reference = marginal_accepted if marginal_accepted > 0.0 else world.last_crude_price_by_locality[locality_id]
         rejected_pressure = max(0.0, marginal_rejected - rejected_reference) / max(rejected_reference, 1.0)
-        cover_markup += min(0.18, rejected_pressure * 0.35)
+        cover_markup += min(0.24, rejected_pressure * 0.42)
         if marginal_rejected > 0.0 and marginal_accepted == 0.0:
-            cover_markup += 0.08
+            cover_markup += 0.10
         shortage_markup = 1.0 + locality_shortage_ratio[locality_id] * 0.65 + max(0.0, locality.fear_multiplier - 1.0) * 0.35
-        new_crude_prices[locality_id] = _clamp(observed_crude * cover_markup * shortage_markup, 32.0, 180.0)
+        crude_noise = 1.0 + _stable_noise(config.seed, world.week, f"crude-price:{locality_id}") * 0.025
+        new_crude_prices[locality_id] = _clamp(observed_crude * cover_markup * shortage_markup * crude_noise, 24.0, 260.0)
 
         product_fulfillment_ratio[locality_id] = {}
         new_product_prices[locality_id] = {}
@@ -1145,15 +1370,17 @@ def step_world(
             shortage = _safe_div(unmet_by_locality_product[locality_id][product], demand)
             product_fulfillment_ratio[locality_id][product] = _safe_div(fulfilled, demand) if demand > 0 else 1.0
             traded_prices = [price for _, price in product_trades.get((locality_id, product), [])]
+            replacement_ask = _product_ask_price(world, locality_id, product, world.product_inventory[locality_id][product])
             if traded_prices:
                 observed_price = max(traded_prices)
             else:
-                observed_price = world.last_product_prices[locality_id][product] * (1.0 + shortage * 0.40)
-            stress_markup = 1.0 + shortage * 0.55 + max(0.0, locality.fear_multiplier - 1.0) * 0.26
+                observed_price = replacement_ask * (1.0 + shortage * 0.35)
+            stress_markup = 1.0 + shortage * 0.62 + max(0.0, locality.fear_multiplier - 1.0) * 0.30
+            product_noise = 1.0 + _stable_noise(config.seed, world.week, f"product-price:{locality_id}:{product}") * 0.030
             new_product_prices[locality_id][product] = _clamp(
-                observed_price * stress_markup,
-                BASE_PRODUCT_PRICES[product] * 0.65,
-                BASE_PRODUCT_PRICES[product] * 2.6,
+                max(observed_price, replacement_ask * 0.92) * stress_markup * product_noise,
+                BASE_PRODUCT_PRICES[product] * 0.55,
+                BASE_PRODUCT_PRICES[product] * 4.2,
             )
 
     _post_clear_locality_fear(world, scenario, locality_shortage_ratio)
@@ -1162,14 +1389,26 @@ def step_world(
     world.last_product_prices = new_product_prices
 
     strategic_weight_total = sum(STRATEGIC_LOCALITY_WEIGHTS.values())
-    jet_fuel_fulfillment = sum(
+    strategic_jet_fulfillment = sum(
         STRATEGIC_LOCALITY_WEIGHTS[locality_id] * product_fulfillment_ratio[locality_id]["jet"]
         for locality_id in world.localities
     ) / strategic_weight_total
-    diesel_fulfillment = sum(
+    strategic_diesel_fulfillment = sum(
         STRATEGIC_LOCALITY_WEIGHTS[locality_id] * product_fulfillment_ratio[locality_id]["diesel"]
         for locality_id in world.localities
     ) / strategic_weight_total
+    military_jet_fulfillment = (
+        _safe_div(product_auction.military_fulfilled_by_product["jet"], product_auction.military_demand_by_product["jet"])
+        if product_auction.military_demand_by_product["jet"] > 0.0
+        else strategic_jet_fulfillment
+    )
+    military_diesel_fulfillment = (
+        _safe_div(product_auction.military_fulfilled_by_product["diesel"], product_auction.military_demand_by_product["diesel"])
+        if product_auction.military_demand_by_product["diesel"] > 0.0
+        else strategic_diesel_fulfillment
+    )
+    jet_fuel_fulfillment = military_jet_fulfillment
+    diesel_fulfillment = military_diesel_fulfillment
     readiness_components = {
         "jet_fuel_fulfillment": jet_fuel_fulfillment,
         "diesel_fulfillment": diesel_fulfillment,
@@ -1214,8 +1453,16 @@ def step_world(
             "average_refinery_utilization": average_refinery_utilization,
             "jet_fuel_fulfillment": jet_fuel_fulfillment,
             "diesel_fulfillment": diesel_fulfillment,
-            "aviation_jet_fulfillment": jet_fuel_fulfillment,
-            "heavy_diesel_fulfillment": diesel_fulfillment,
+            "aviation_jet_fulfillment": strategic_jet_fulfillment,
+            "heavy_diesel_fulfillment": strategic_diesel_fulfillment,
+            "military_jet_demand_bbl": product_auction.military_demand_by_product["jet"],
+            "military_diesel_demand_bbl": product_auction.military_demand_by_product["diesel"],
+            "military_jet_fulfilled_bbl": product_auction.military_fulfilled_by_product["jet"],
+            "military_diesel_fulfilled_bbl": product_auction.military_fulfilled_by_product["diesel"],
+            "military_jet_fulfillment": military_jet_fulfillment,
+            "military_diesel_fulfillment": military_diesel_fulfillment,
+            "strategic_market_jet_fulfillment": strategic_jet_fulfillment,
+            "strategic_market_diesel_fulfillment": strategic_diesel_fulfillment,
             "spr_inventory_bbl": world.strategic_reserve_inventory_bbl,
             "spr_capacity_ratio": strategic_reserve_capacity_ratio,
             "spr_market_value_usd": strategic_reserve_market_value_usd,

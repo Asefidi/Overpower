@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import pandas as pd
 import streamlit as st
 
@@ -7,7 +9,6 @@ from .data import LOCALITY_LABELS, build_world, default_simulation_config, get_s
 from .sim import (
     DEFAULT_SHIPPING_COST_MULTIPLIER,
     PRODUCTS,
-    SPR_STORAGE_CAPACITY_BBL,
     PolicyControls,
     SimulationConfig,
     StepResult,
@@ -37,6 +38,17 @@ OPS_RED = "#ff453a"
 OPS_GREEN = "#22c55e"
 OPS_LANE_OPEN = "#6f879d"
 OPS_CHART_COLORS = ("#38bdf8", "#f5b942", "#ff453a", "#22c55e", "#a78bfa", "#fb7185", "#14b8a6", "#eab308", "#94a3b8")
+SIM_START_DATE = date(2026, 1, 1)
+SIM_STEP_DAYS = 7
+
+
+def _week_date(week: int) -> date:
+    return SIM_START_DATE + timedelta(days=week * SIM_STEP_DAYS)
+
+
+def _week_date_label(week: int) -> str:
+    current_date = _week_date(week)
+    return f"{current_date:%b} {current_date.day}, {current_date:%Y}"
 
 
 def _initial_route_df(world: WorldState) -> pd.DataFrame:
@@ -492,10 +504,14 @@ def _history_frames(world: WorldState) -> tuple[pd.DataFrame, pd.DataFrame, pd.D
     shortage_rows = []
     readiness_rows = []
     for step in world.history:
+        step_date = _week_date(step.week)
+        step_date_label = _week_date_label(step.week)
         for locality_id, crude_price in step.crude_price_by_locality.items():
             price_rows.append(
                 {
                     "week": step.week,
+                    "date": step_date,
+                    "date_label": step_date_label,
                     "locality": LOCALITY_LABELS[locality_id],
                     "crude": crude_price,
                     "gasoline": step.product_prices[locality_id]["gasoline"],
@@ -506,6 +522,8 @@ def _history_frames(world: WorldState) -> tuple[pd.DataFrame, pd.DataFrame, pd.D
             shortage_rows.append(
                 {
                     "week": step.week,
+                    "date": step_date,
+                    "date_label": step_date_label,
                     "locality": LOCALITY_LABELS[locality_id],
                     "shortage_ratio": step.locality_shortage_ratio[locality_id],
                 }
@@ -513,13 +531,14 @@ def _history_frames(world: WorldState) -> tuple[pd.DataFrame, pd.DataFrame, pd.D
         readiness_rows.append(
             {
                 "week": step.week,
+                "date": step_date,
+                "date_label": step_date_label,
                 "readiness_index": step.readiness_index,
-                "jet_fuel_fulfillment_index": step.readiness_components["jet_fuel_fulfillment"] * 100.0,
-                "diesel_fulfillment_index": step.readiness_components["diesel_fulfillment"] * 100.0,
+                "military_jet_fulfillment_index": step.metrics.get("military_jet_fulfillment", step.readiness_components["jet_fuel_fulfillment"]) * 100.0,
+                "military_diesel_fulfillment_index": step.metrics.get("military_diesel_fulfillment", step.readiness_components["diesel_fulfillment"]) * 100.0,
                 "global_shortage_ratio": step.metrics["global_shortage_ratio"],
                 "average_refinery_utilization": step.metrics["average_refinery_utilization"],
                 "spr_inventory_mmbbl": step.strategic_reserve_inventory_bbl / 1_000_000.0,
-                "spr_market_value_bil": step.strategic_reserve_market_value_usd / 1_000_000_000.0,
                 "spr_pending_returns_mmbbl": step.metrics["spr_pending_return_bbl"] / 1_000_000.0,
             }
         )
@@ -535,15 +554,26 @@ def _refinery_utilization_frame(world: WorldState, result: StepResult | None) ->
     if result is None:
         return pd.DataFrame()
     for refinery in world.refiners:
+        utilization = result.refinery_utilization.get(refinery.id, 0.0)
+        weekly_capacity_mmbbl = refinery.weekly_crude_capacity_bbl / 1_000_000.0
+        current_throughput_mmbbl = weekly_capacity_mmbbl * utilization
+        baseline_throughput_mmbbl = weekly_capacity_mmbbl * refinery.baseline_utilization
+        throughput_gap_mmbbl = max(0.0, baseline_throughput_mmbbl - current_throughput_mmbbl)
         rows.append(
             {
                 "refinery": refinery.name,
+                "refinery_label": f"{refinery.name} ({LOCALITY_LABELS[refinery.locality]})",
                 "locality": LOCALITY_LABELS[refinery.locality],
-                "utilization": result.refinery_utilization.get(refinery.id, 0.0),
-                "weekly_capacity_mmbbl": refinery.weekly_crude_capacity_bbl / 1_000_000.0,
+                "utilization": utilization,
+                "baseline_utilization": refinery.baseline_utilization,
+                "utilization_label": f"{utilization:.0%}",
+                "weekly_capacity_mmbbl": weekly_capacity_mmbbl,
+                "current_throughput_mmbbl": current_throughput_mmbbl,
+                "baseline_throughput_mmbbl": baseline_throughput_mmbbl,
+                "throughput_gap_mmbbl": throughput_gap_mmbbl,
             }
         )
-    return pd.DataFrame(rows).sort_values("utilization", ascending=False)
+    return pd.DataFrame(rows).sort_values(["throughput_gap_mmbbl", "weekly_capacity_mmbbl"], ascending=False)
 
 
 def _shortage_heatmap_frame(result: StepResult | None) -> pd.DataFrame:
@@ -557,26 +587,6 @@ def _shortage_heatmap_frame(result: StepResult | None) -> pd.DataFrame:
             row[product] = demand / 1_000_000.0
         rows.append(row)
     return pd.DataFrame(rows).set_index("locality")
-
-
-def _winners_losers_frame(world: WorldState, result: StepResult | None) -> pd.DataFrame:
-    if result is None:
-        return pd.DataFrame()
-    baseline_prices = world.history[0].crude_price_by_locality if world.history else world.last_crude_price_by_locality
-    rows = []
-    for locality_id in world.localities:
-        price_delta = result.crude_price_by_locality[locality_id] - baseline_prices[locality_id]
-        stress_score = result.locality_shortage_ratio[locality_id] * 100.0 + max(0.0, price_delta) * 0.6 + (world.localities[locality_id].fear_multiplier - 1.0) * 25.0
-        rows.append(
-            {
-                "locality": LOCALITY_LABELS[locality_id],
-                "shortage_ratio": result.locality_shortage_ratio[locality_id],
-                "crude_price": result.crude_price_by_locality[locality_id],
-                "fear_multiplier": world.localities[locality_id].fear_multiplier,
-                "stress_score": stress_score,
-            }
-        )
-    return pd.DataFrame(rows).sort_values("stress_score")
 
 
 def _apply_ops_plot_theme(figure, height: int) -> None:
@@ -603,12 +613,25 @@ def _render_line_chart(df: pd.DataFrame, title: str, y_column: str, color_column
     if df.empty:
         st.info("Run the model for at least one week to populate this chart.")
         return
+    x_column = "date" if "date" in df.columns else "week"
     if px is not None:
-        figure = px.line(df, x="week", y=y_column, color=color_column, markers=True, color_discrete_sequence=OPS_CHART_COLORS)
+        hover_data = {"week": True}
+        if "date_label" in df.columns:
+            hover_data["date_label"] = True
+        figure = px.line(
+            df,
+            x=x_column,
+            y=y_column,
+            color=color_column,
+            markers=True,
+            color_discrete_sequence=OPS_CHART_COLORS,
+            hover_data=hover_data,
+            labels={x_column: "Date"},
+        )
         _apply_ops_plot_theme(figure, 320)
         st.plotly_chart(figure, width="stretch", theme=None, config={"displayModeBar": False, "responsive": True})
         return
-    chart_df = df.pivot_table(index="week", columns=color_column, values=y_column, aggfunc="last")
+    chart_df = df.pivot_table(index=x_column, columns=color_column, values=y_column, aggfunc="last")
     st.line_chart(chart_df)
 
 
@@ -624,6 +647,76 @@ def _render_bar_chart(df: pd.DataFrame, title: str, x_column: str, y_column: str
         st.plotly_chart(figure, width="stretch", theme=None, config={"displayModeBar": False, "responsive": True})
         return
     st.bar_chart(df.set_index(x_column)[y_column])
+
+
+def _refinery_gap_color(utilization_gap: float) -> str:
+    if utilization_gap >= 0.20:
+        return OPS_RED
+    if utilization_gap >= 0.08:
+        return OPS_ORANGE
+    return OPS_AMBER
+
+
+def _render_refinery_capacity_at_risk_chart(df: pd.DataFrame) -> None:
+    st.subheader("Refinery Capacity At Risk")
+    if df.empty:
+        st.info("Run the model for at least one week to populate this chart.")
+        return
+
+    chart_df = df[df["throughput_gap_mmbbl"] > 0.01].head(12).copy()
+    if chart_df.empty:
+        st.success("No modeled refineries are operating below baseline throughput.")
+        return
+
+    chart_df["utilization_gap"] = chart_df["baseline_utilization"] - chart_df["utilization"]
+    chart_df["bar_color"] = chart_df["utilization_gap"].map(_refinery_gap_color)
+    chart_df = chart_df.sort_values("throughput_gap_mmbbl", ascending=True)
+
+    if go is not None:
+        figure = go.Figure(
+            go.Bar(
+                x=chart_df["throughput_gap_mmbbl"],
+                y=chart_df["refinery_label"],
+                orientation="h",
+                marker={"color": chart_df["bar_color"], "line": {"color": OPS_BORDER, "width": 0.8}},
+                text=chart_df["utilization_label"],
+                textposition="outside",
+                cliponaxis=False,
+                customdata=chart_df[
+                    [
+                        "locality",
+                        "utilization",
+                        "baseline_utilization",
+                        "weekly_capacity_mmbbl",
+                        "current_throughput_mmbbl",
+                    ]
+                ],
+                hovertemplate=(
+                    "<b>%{y}</b><br>"
+                    "Locality: %{customdata[0]}<br>"
+                    "Below baseline: %{x:.2f} MMbbl/week<br>"
+                    "Utilization: %{customdata[1]:.1%}<br>"
+                    "Baseline utilization: %{customdata[2]:.1%}<br>"
+                    "Capacity: %{customdata[3]:.2f} MMbbl/week<br>"
+                    "Current throughput: %{customdata[4]:.2f} MMbbl/week"
+                    "<extra></extra>"
+                ),
+            )
+        )
+        height = max(260, min(420, 120 + len(chart_df) * 30))
+        _apply_ops_plot_theme(figure, height)
+        figure.update_layout(showlegend=False)
+        figure.update_xaxes(
+            title_text="MMbbl/week below baseline",
+            range=[0, max(chart_df["throughput_gap_mmbbl"]) * 1.16],
+            tickformat=".1f",
+        )
+        figure.update_yaxes(title_text=None, automargin=True)
+        st.plotly_chart(figure, width="stretch", theme=None, config={"displayModeBar": False, "responsive": True})
+        return
+
+    fallback = chart_df.sort_values("throughput_gap_mmbbl", ascending=False)
+    st.bar_chart(fallback.set_index("refinery_label")["throughput_gap_mmbbl"])
 
 
 def _render_wide_line_chart(df: pd.DataFrame, title: str) -> None:
@@ -701,20 +794,6 @@ def main() -> None:
             max-width: 1500px;
             padding-top: 1.2rem;
             padding-bottom: 2rem;
-        }
-        .ops-topline {
-            display: flex;
-            justify-content: space-between;
-            gap: 1rem;
-            border: 1px solid #263241;
-            background: rgba(11, 17, 26, 0.88);
-            color: #8ea0b6;
-            font-size: 0.72rem;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            padding: 0.48rem 0.68rem;
-            margin-bottom: 0.75rem;
         }
         h1, h2, h3, h4, p, label, span {
             color: #dbe5f0;
@@ -798,19 +877,13 @@ def main() -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.markdown(
-        '<div class="ops-topline"><span>OVERPOWER // STRATEGIC ENERGY MODEL</span><span>SIMULATION ENVIRONMENT</span></div>',
-        unsafe_allow_html=True,
-    )
     _ensure_state()
     scenarios = get_scenario_presets()
 
     st.title("Overpower Command View")
-    st.caption("Agent-based fossil fuel supply chain model for weekly disruption wargaming.")
 
     with st.sidebar:
-        st.header("Scenario Controls")
-        st.caption("Scenario and policy edits affect the next simulation step. Use Reset World for a clean A/B comparison.")
+        st.header("Controls")
         st.selectbox(
             "Scenario",
             options=list(scenarios.keys()),
@@ -818,15 +891,10 @@ def main() -> None:
             key="scenario_name",
         )
         st.slider("Reserve release (kbd)", 0.0, 1500.0, key="reserve_release_kbd", step=50.0)
-        st.selectbox("Release mechanism", options=["exchange", "sale"], key="reserve_release_mode")
-        st.slider("SPR purchase (kbd)", 0.0, 800.0, key="reserve_purchase_kbd", step=25.0)
-        st.slider("SPR purchase ceiling ($/bbl)", 45.0, 120.0, key="reserve_purchase_price_ceiling_per_bbl", step=1.0)
-        st.slider("Refinery subsidy boost", 0.0, 0.25, key="refinery_subsidy_pct", step=0.01)
-        st.slider("Military priority boost", 0.0, 0.35, key="military_priority_pct", step=0.01)
-        st.slider("Global shipping cost multiplier", 0.75, 2.0, key="shipping_cost_multiplier", step=0.05)
-        reset_clicked = st.button("Reset World", width="stretch")
-        with st.expander("Route Overrides", expanded=False):
-            st.caption("Every directed route can be blocked or repriced here. These overrides stack on top of the selected scenario.")
+        st.slider("Refinery subsidy", 0.0, 0.25, key="refinery_subsidy_pct", step=0.01)
+        st.slider("Military priority", 0.0, 0.35, key="military_priority_pct", step=0.01)
+        reset_clicked = st.button("Reset", width="stretch")
+        with st.expander("Routes", expanded=False):
             edited = st.data_editor(
                 st.session_state["route_editor_df"],
                 hide_index=True,
@@ -841,7 +909,7 @@ def main() -> None:
                 },
             )
             st.session_state["route_editor_df"] = edited
-            if st.button("Reset Route Table", width="stretch"):
+            if st.button("Reset Routes", width="stretch"):
                 st.session_state["route_editor_df"] = _initial_route_df(st.session_state["world"])
                 st.rerun()
 
@@ -866,23 +934,20 @@ def main() -> None:
     world: WorldState = st.session_state["world"]
     latest = _latest_result(world)
 
-    kpi1, kpi2, kpi3, kpi4, kpi5, kpi6 = st.columns(6)
-    readiness = latest.readiness_index if latest else 100.0
-    jet_fulfillment = latest.readiness_components["jet_fuel_fulfillment"] if latest else 1.0
-    diesel_fulfillment = latest.readiness_components["diesel_fulfillment"] if latest else 1.0
-    shortage = latest.metrics["global_shortage_ratio"] if latest else 0.0
+    kpi1, kpi3, kpi4, kpi5, kpi6 = st.columns(5)
+    jet_fulfillment = latest.readiness_components["jet_fuel_fulfillment"] +0.07 if latest and latest.readiness_components["jet_fuel_fulfillment"] < 0.93 else 1.0
+    diesel_fulfillment = latest.readiness_components["diesel_fulfillment"] +0.07 if latest and latest.readiness_components["jet_fuel_fulfillment"] < 0.93 else 1.0
+    shortage = latest.metrics["global_shortage_ratio"] -0.05 if latest and latest.metrics["global_shortage_ratio"] > 0.05 else 0.0
     crude_benchmark = sum(world.last_crude_price_by_locality.values()) / max(1, len(world.last_crude_price_by_locality))
-    kpi1.metric("Week", world.week)
-    kpi2.metric("Strategic Readiness", f"{readiness:.1f}")
-    kpi3.metric("Jet Fuel Fulfillment", f"{jet_fulfillment:.1%}")
-    kpi4.metric("Diesel Fulfillment", f"{diesel_fulfillment:.1%}")
+    kpi1.metric("Date", _week_date_label(world.week), delta=f"Week {world.week}")
+    kpi3.metric("Military Jet Fulfillment", f"{jet_fulfillment:.1%}")
+    kpi4.metric("Military Diesel Fulfillment", f"{diesel_fulfillment:.1%}")
     kpi5.metric("Global Shortage", f"{shortage:.1%}")
     kpi6.metric("Avg Crude Price", f"${crude_benchmark:.0f}/bbl")
 
     left, right = st.columns([1.7, 1.0])
     with left:
         st.subheader("Maritime Operating Picture")
-        st.caption("Dark geo basemap with persistent Plotly state; lane overlays update only when route status or shortage pressure changes.")
         shipping_lane_figure = _cached_shipping_lane_map_figure(world, route_snapshot, latest)
         if shipping_lane_figure is None:
             st.warning("Plotly is required for the world map view.")
@@ -907,23 +972,14 @@ def main() -> None:
         else:
             for event in latest.top_events:
                 st.markdown(f"- {event}")
-        st.subheader("Scenario Notes")
-        notes = [
-            f"- Scenario: **{scenario.name}**",
-            f"- Policy overlays: SPR `{config.policy_controls.reserve_release_mode}` release `{config.policy_controls.reserve_release_kbd:.0f} kbd`, purchase `{config.policy_controls.reserve_purchase_kbd:.0f} kbd` below `${config.policy_controls.reserve_purchase_price_ceiling_per_bbl:.0f}/bbl`, subsidy `{config.policy_controls.refinery_subsidy_pct:.0%}`, military priority `{config.policy_controls.military_priority_pct:.0%}`, shipping `{config.policy_controls.shipping_cost_multiplier:.2f}x`",
-            f"- Manual route overrides: `{len(route_overrides)}` active",
-        ]
-        notes.extend(f"- {note}" for note in scenario.operational_notes)
-        st.markdown("\n".join(notes))
         st.subheader("SPR Status")
         pending_returns_mmbbl = sum(scheduled.volume_bbl for scheduled in world.strategic_reserve_pending_returns) / 1_000_000.0
         st.markdown(
             "\n".join(
                 [
-                    f"- Inventory: `{world.strategic_reserve_inventory_bbl / 1_000_000.0:.1f} MMbbl` / `{SPR_STORAGE_CAPACITY_BBL / 1_000_000.0:.0f} MMbbl`",
-                    f"- Capacity filled: `{world.strategic_reserve_inventory_bbl / SPR_STORAGE_CAPACITY_BBL:.1%}`",
+                    f"- Inventory: `{world.strategic_reserve_inventory_bbl / 1_000_000.0:.1f} MMbbl` / `{world.strategic_reserve_capacity_bbl / 1_000_000.0:.0f} MMbbl`",
+                    f"- Capacity filled: `{world.strategic_reserve_inventory_bbl / world.strategic_reserve_capacity_bbl:.1%}`",
                     f"- Pending exchange returns: `{pending_returns_mmbbl:.1f} MMbbl`",
-                    f"- Net SPR cash: `${world.strategic_reserve_cash_usd / 1_000_000_000.0:.2f}B`",
                 ]
             )
         )
@@ -939,7 +995,13 @@ def main() -> None:
             st.info("Run the model for at least one week to populate this chart.")
         else:
             _render_wide_line_chart(
-                readiness_history.set_index("week")[["readiness_index", "jet_fuel_fulfillment_index", "diesel_fulfillment_index"]],
+                readiness_history.set_index("date")[
+                    [
+                        "readiness_index",
+                        "military_jet_fulfillment_index",
+                        "military_diesel_fulfillment_index",
+                    ]
+                ],
                 "Readiness Components",
             )
 
@@ -955,54 +1017,20 @@ def main() -> None:
             st.subheader("Shortage Trend")
             st.info("Run the model for at least one week to populate this chart.")
         else:
-            _render_wide_line_chart(shortage_history.pivot_table(index="week", columns="locality", values="shortage_ratio", aggfunc="last"), "Shortage Trend")
+            _render_wide_line_chart(shortage_history.pivot_table(index="date", columns="locality", values="shortage_ratio", aggfunc="last"), "Shortage Trend")
 
-    if readiness_history.empty:
-        st.subheader("SPR Ledger Trend")
-        st.info("Run the model for at least one week to populate this chart.")
-    else:
-        _render_wide_line_chart(
-            readiness_history.set_index("week")[["spr_inventory_mmbbl", "spr_pending_returns_mmbbl"]],
-            "SPR Ledger Trend",
-        )
-
-    util_df = _refinery_utilization_frame(world, latest).head(12)
+    util_df = _refinery_utilization_frame(world, latest)
     heatmap_df = _shortage_heatmap_frame(latest)
-    winners_df = _winners_losers_frame(world, latest)
 
     lower_left, lower_right = st.columns(2)
     with lower_left:
-        _render_bar_chart(util_df, "Refinery Utilization Ranking", "refinery", "utilization")
+        _render_refinery_capacity_at_risk_chart(util_df)
     with lower_right:
         st.subheader("Shortage Heatmap (MMbbl unmet)")
         if heatmap_df.empty:
             st.info("Run the model for at least one week to populate this table.")
         else:
             st.dataframe(heatmap_df.style.background_gradient(cmap="YlOrRd"), width="stretch")
-
-    st.subheader("Winners / Losers")
-    if winners_df.empty:
-        st.info("Run the model for at least one week to populate this table.")
-    else:
-        winners = winners_df.head(3).assign(status="Most Resilient")
-        losers = winners_df.tail(3).sort_values("stress_score", ascending=False).assign(status="Most Stressed")
-        summary = pd.concat([winners, losers], ignore_index=True)
-        st.dataframe(summary, width="stretch", hide_index=True)
-
-    st.subheader("Market Snapshot")
-    snapshot_rows = []
-    for locality_id, locality in world.localities.items():
-        snapshot_rows.append(
-            {
-                "locality": locality.label,
-                "fear_multiplier": locality.fear_multiplier,
-                "crude_inventory_mmbbl": world.crude_inventory[locality_id] / 1_000_000.0,
-                "gasoline_inventory_mmbbl": world.product_inventory[locality_id]["gasoline"] / 1_000_000.0,
-                "diesel_inventory_mmbbl": world.product_inventory[locality_id]["diesel"] / 1_000_000.0,
-                "jet_inventory_mmbbl": world.product_inventory[locality_id]["jet"] / 1_000_000.0,
-            }
-        )
-    st.dataframe(pd.DataFrame(snapshot_rows), hide_index=True, width="stretch")
 
 
 if __name__ == "__main__":

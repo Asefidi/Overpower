@@ -20,6 +20,7 @@ from .sim import (
     ScenarioPreset,
     SimulationConfig,
     WorldState,
+    step_world,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -164,16 +165,31 @@ HOUSEHOLD_PRICE_PRIORITIES = {
     "q4": {"gasoline": 1.16, "diesel": 0.92, "jet": 0.0},
 }
 
-NORTHCOM_MILITARY_BUY_SHARES = {
-    "gasoline": 0.00,
-    "diesel": 0.03,
-    "jet": 0.08,
+# Public OUSD operational-energy data gives a roughly 73M bbl/year DoD fuel basis;
+# DLA Energy public pages identify military jet and diesel fuels as core products.
+PUBLIC_DOD_OPERATIONAL_FUEL_BBL_YEAR = 73_000_000.0
+DOD_OVERSEAS_PURCHASE_SHARE = 0.48
+
+MILITARY_BUYER_LOCALITY_WEIGHTS = {
+    "NORTHCOM": 1.0 - DOD_OVERSEAS_PURCHASE_SHARE,
+    "INDOPACOM": DOD_OVERSEAS_PURCHASE_SHARE,
 }
 
-NORTHCOM_MILITARY_PRICE_PRIORITIES = {
+MILITARY_OPERATIONAL_PRODUCT_MIX = {
+    "gasoline": 0.00,
+    "diesel": 0.35,
+    "jet": 0.65,
+}
+
+MILITARY_PRICE_PRIORITIES = {
     "gasoline": 0.0,
-    "diesel": 1.72,
-    "jet": 1.92,
+    "diesel": 5.20,
+    "jet": 5.80,
+}
+
+MILITARY_BUYER_NAMES = {
+    "NORTHCOM": "NORTHCOM Military Fuel Buyer",
+    "INDOPACOM": "INDOPACOM Military Fuel Buyer",
 }
 
 EXTRACTION_COST_BY_LOCALITY = {
@@ -183,7 +199,7 @@ EXTRACTION_COST_BY_LOCALITY = {
     "EUCOM": 50.0,
     "INDOPACOM": 48.0,
     "IRAN": 34.0,
-    "NORTHCOM": 49.0,
+    "NORTHCOM": 39.0,
     "RUSSIA": 39.0,
     "SOUTHCOM": 42.0,
 }
@@ -562,6 +578,22 @@ def _household_quartile_weights(locality: LocalityState) -> dict[str, float]:
     return {quartile: max(0.01, value) / total for quartile, value in weights.items()}
 
 
+def _military_buyer_base_demand(locality_id: str, sector_totals: dict[str, float]) -> dict[str, float]:
+    buyer_weight = MILITARY_BUYER_LOCALITY_WEIGHTS.get(locality_id, 0.0)
+    if buyer_weight <= 0.0:
+        return {product: 0.0 for product in PRODUCTS}
+
+    weekly_operational_fuel = PUBLIC_DOD_OPERATIONAL_FUEL_BBL_YEAR / 52.0
+    buyer_total = weekly_operational_fuel * buyer_weight
+    return {
+        product: min(
+            sector_totals[product],
+            buyer_total * MILITARY_OPERATIONAL_PRODUCT_MIX[product],
+        )
+        for product in PRODUCTS
+    }
+
+
 def build_demand_agents(localities: dict[str, LocalityState]) -> list[DemandAgent]:
     agents: list[DemandAgent] = []
     for locality_id, locality in localities.items():
@@ -575,11 +607,8 @@ def build_demand_agents(localities: dict[str, LocalityState]) -> list[DemandAgen
             for product in PRODUCTS
         }
         military_totals = {product: 0.0 for product in PRODUCTS}
-        if locality_id == "NORTHCOM":
-            military_totals = {
-                product: locality.base_product_demand_bbl_week[product] * NORTHCOM_MILITARY_BUY_SHARES[product]
-                for product in PRODUCTS
-            }
+        if locality_id in MILITARY_BUYER_LOCALITY_WEIGHTS:
+            military_totals = _military_buyer_base_demand(locality_id, sector_totals)
             sector_totals = {
                 product: max(0.0, sector_totals[product] - military_totals[product])
                 for product in PRODUCTS
@@ -589,16 +618,16 @@ def build_demand_agents(localities: dict[str, LocalityState]) -> list[DemandAgen
             product: sum(SECTOR_VOLUME_WEIGHTS[sector][product] for sector in SECTOR_VOLUME_WEIGHTS)
             for product in PRODUCTS
         }
-        if locality_id == "NORTHCOM":
+        if sum(military_totals.values()) > 0.0:
             agents.append(
                 DemandAgent(
-                    id="northcom-military-buyer",
-                    name="NORTHCOM Military Fuel Buyer",
+                    id=f"{locality_id.lower()}-military-buyer",
+                    name=MILITARY_BUYER_NAMES[locality_id],
                     locality=locality_id,
                     agent_kind="military",
                     segment="military",
                     base_demand_bbl_week=military_totals,
-                    price_priority=dict(NORTHCOM_MILITARY_PRICE_PRIORITIES),
+                    price_priority=dict(MILITARY_PRICE_PRIORITIES),
                     income_multiplier=1.0,
                 )
             )
@@ -739,12 +768,13 @@ def get_scenario_presets() -> dict[str, ScenarioPreset]:
                 "CENTCOM": 0.42,
                 "IRAN": 0.55,
                 "EUCOM": 0.30,
-                "INDOPACOM": 0.36,
-                "CHINA": 0.30,
+                "INDOPACOM": 0.44,
+                "CHINA": 0.46,
                 "NORTHCOM": 0.14,
             },
             producer_supply_shocks={"CENTCOM": 0.55, "IRAN": 0.45},
-            refinery_capacity_shocks={"CENTCOM": 0.82, "IRAN": 0.72},
+            refinery_capacity_shocks={"CENTCOM": 0.82, "IRAN": 0.72, "CHINA": 0.82, "INDOPACOM": 0.84},
+            military_demand_shocks={"NORTHCOM": 0.08, "INDOPACOM": 0.22},
         ),
         "cis_disruption": ScenarioPreset(
             name="Russia Disruption",
@@ -758,6 +788,7 @@ def get_scenario_presets() -> dict[str, ScenarioPreset]:
             locality_fear_shocks={"RUSSIA": 0.50, "EUCOM": 0.38},
             producer_supply_shocks={"RUSSIA": 0.55},
             refinery_capacity_shocks={"RUSSIA": 0.78},
+            military_demand_shocks={"NORTHCOM": 0.04, "INDOPACOM": 0.04},
         ),
         "venezuela_outage": ScenarioPreset(
             name="Venezuela Outage",
@@ -771,6 +802,7 @@ def get_scenario_presets() -> dict[str, ScenarioPreset]:
             locality_fear_shocks={"SOUTHCOM": 0.36, "NORTHCOM": 0.10},
             producer_country_shocks={"Venezuela": 0.20},
             refinery_country_shocks={"Venezuela": 0.28},
+            military_demand_shocks={"NORTHCOM": 0.05},
         ),
         "coordinated_mitigation": ScenarioPreset(
             name="Coordinated Mitigation",
@@ -793,6 +825,58 @@ def get_scenario_presets() -> dict[str, ScenarioPreset]:
 
 def default_simulation_config(selected_scenario: str = "baseline") -> SimulationConfig:
     return SimulationConfig(selected_scenario=selected_scenario)
+
+
+def _baseline_warm_start_config(config: SimulationConfig, warm_start_weeks: int) -> SimulationConfig:
+    return SimulationConfig(
+        seed=config.seed,
+        start_week=config.start_week - warm_start_weeks,
+        selected_scenario="baseline",
+        route_overrides=dict(config.route_overrides),
+        policy_controls=PolicyControls(
+            shipping_cost_multiplier=config.policy_controls.shipping_cost_multiplier,
+        ),
+        demand_sensitivity=config.demand_sensitivity,
+        inventory_cover_weeks=config.inventory_cover_weeks,
+        warm_start_weeks=0,
+    )
+
+
+def _warm_start_baseline_equilibrium(world: WorldState, config: SimulationConfig) -> None:
+    warm_start_weeks = max(0, int(config.warm_start_weeks))
+    if warm_start_weeks <= 0:
+        return
+
+    display_week = config.start_week
+    world.week = display_week - warm_start_weeks
+    warm_config = _baseline_warm_start_config(config, warm_start_weeks)
+    scenarios = get_scenario_presets()
+    for _ in range(warm_start_weeks):
+        step_world(world, warm_config, scenarios)
+
+    settled_week = world.week
+    for shipment in world.shipments_in_transit:
+        remaining_weeks = max(1, shipment.arrival_week - settled_week)
+        shipment.arrival_week = display_week + remaining_weeks
+
+    for locality in world.localities.values():
+        locality.fear_multiplier = max(0.97, min(1.03, locality.fear_multiplier))
+        world.crude_inventory[locality.id] = max(
+            world.crude_inventory[locality.id],
+            locality.baseline_refinery_throughput_bbl_week * 0.95,
+        )
+        for product in PRODUCTS:
+            world.product_inventory[locality.id][product] = max(
+                world.product_inventory[locality.id][product],
+                locality.base_product_demand_bbl_week[product] * 0.30,
+            )
+    for agent in world.demand_agents:
+        for product in PRODUCTS:
+            agent.backlog_bbl[product] = 0.0
+
+    world.week = display_week
+    world.history = []
+    world.metrics = {}
 
 
 def build_world(config: SimulationConfig | None = None) -> WorldState:
@@ -827,7 +911,7 @@ def build_world(config: SimulationConfig | None = None) -> WorldState:
         for locality_id in localities
     }
 
-    return WorldState(
+    world = WorldState(
         week=config.start_week,
         localities=localities,
         producers=producers,
@@ -845,3 +929,5 @@ def build_world(config: SimulationConfig | None = None) -> WorldState:
         last_crude_price_by_locality=last_crude_prices,
         last_product_prices=last_product_prices,
     )
+    _warm_start_baseline_equilibrium(world, config)
+    return world

@@ -78,6 +78,8 @@ Assume fixed oil production and refining capacity.
 
 ## Data sourcing:
 https://www.energyinst.org/statistical-review/home
+https://www.acq.osd.mil/eie/ero/oe/index.html
+gem idk i'll write this tomorrow.
 
 ## Future additions:
 I can incorporate my behavioural model that simulates real financial thinking and the aggregate behaviours of analysts and speculators seeking higher returns.
