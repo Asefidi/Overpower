@@ -10,8 +10,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MAIN_DATA_PATH = ROOT / "src/datasets/Global-Oil-and-Gas-Extraction-Tracker-March-2026__Field-level_main_data.csv"
-PRODUCTION_DATA_PATH = ROOT / "src/datasets/Global-Oil-and-Gas-Extraction-Tracker-March-2026__Field-level_production_data.csv"
+MAIN_DATA_PATH = ROOT / "src/raw-input-data/Global-Oil-and-Gas-Extraction-Tracker-March-2026__Field-level_main_data.csv"
+PRODUCTION_DATA_PATH = ROOT / "src/raw-input-data/Global-Oil-and-Gas-Extraction-Tracker-March-2026__Field-level_production_data.csv"
 OUTPUT_PATH = ROOT / "src/cleaned-data/owner-agent-country-rollup-50.csv"
 
 TOP_COMPANY_COUNT = 20

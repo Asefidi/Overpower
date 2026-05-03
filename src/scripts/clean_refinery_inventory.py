@@ -25,7 +25,7 @@ import xlrd
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE_XLS = ROOT / "src/datasets/US_Mexico_Canada_International_Refineries_Capacity.xls"
+SOURCE_XLS = ROOT / "src/raw-input-data/US_Mexico_Canada_International_Refineries_Capacity.xls"
 OUTPUT_CSV = ROOT / "src/cleaned-data/refinery-inventory-cleaned.csv"
 OUTPUT_MAJOR_CSV = ROOT / "src/cleaned-data/refinery-inventory-major.csv"
 
