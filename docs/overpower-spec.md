@@ -1,7 +1,7 @@
 # Overpower MVP Spec
 
 ## Purpose
-Overpower is a scenario-driven agent-based fossil fuel supply chain simulator. The MVP is not trying to be a perfect macro forecast. Its job is to make cascading failure legible: show how a chokepoint shock or policy intervention propagates through production, transit, refining, civilian demand, and military fuel availability.
+Overpower is a scenario-driven agent-based model of the fossil fuel supply chain. The MVP is not trying to be a perfect macro forecast. Its job is to model nonlinear market dynamics and cascading failure, showing how a chokepoint shock or policy intervention propagates through production, transit, refining, civilian demand, and military fuel availability.
 
 ## Source Hierarchy
 1. `README.md` is the source of truth for mission, problem framing, and the long-term research direction.

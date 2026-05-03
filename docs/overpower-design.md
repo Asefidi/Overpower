@@ -1,63 +1,31 @@
 # Overpower MVP Technical Design
 
 ## Design Principles
-1. realistic: this project attempts to 
-2. Legible causality over perfect calibration: users should be able to see why prices moved.
-3. Standard library only inside the engine.
-4. Single in-memory state tree so Streamlit can persist it cleanly in `st.session_state`.
-5. Fast enough to step dozens of days interactively without special optimization.
+1. realistic: this project attempts to create a realistic agent based model of the fuel supply chain
+2. Non-Linear: This project attempts to model real market clearing mechanisms and model the effects of microdecisions on macro outcomes
+3. assume flexible prices and output
 
-## Recommended File Layout
-For the hackathon MVP, keep the architecture intentionally small:
+## agents
+represent each region's crude production as a singular profit maximizing agent.
+represent each nation's refinery production as a singular profit maximizing agent with a specific storage capacity and a demand multiplier for crude fear determined based on time since shock and major changes in global price.
+give each nation 5 firm agents representing five industrial sectors:
+heavy logistics (shipping)
+aviation
+agriculture
+light logistics (rail, last mile trucking, etc)
+intialize a transportation agent 
+other (construction, transportation, mining, etc)
+assign each sector its own MWTP curve, create a heuristic for estimating it per region
+create ten household agents per region representing each decile in a region, base their MWTP on GDP per capita, they exclusively consume gasoline, they are willing to spend 3% of their share of national output on fossil fuels per year, so 0.00008219178 of their share per day.
 
-1. `engine.py`
-   - owns state initialization
-   - owns the `OverpowerEngine` class
-   - owns the daily `step()` pipeline
-2. `app.py`
-   - owns Streamlit layout, controls, charts, and text readouts
-   - stores the engine object in `st.session_state`
-3. `src/cleaned-data/core-data.csv`
-   - optional seed input for baseline constants
-4. `docs/`
-   - spec and design notes
 
-If initialization logic starts to overwhelm `engine.py`, split only then:
-1. `src/bootstrap_state.py` for a static baseline dictionary
-2. `src/scenarios.py` for intervention presets
 
+## not modeled:
+currency dynamics, inflationary and recessionary gaps. 
+disregard all refining output except gasoline, jet fuel, diesel. 
 ## Engine State Shape
 Use a plain nested dictionary. A recommended top-level shape is:
 
-```python
-state = {
-    "clock": {
-        "day": 0,
-        "label": "Day 0",
-    },
-    "scenario": {
-        "active_toggles": {
-            "block_hormuz": False,
-            "russian_embargo": False,
-            "dpa": False,
-        },
-        "pending_actions": {
-            "spr_drawdown_kbbl": 0.0,
-        },
-    },
-    "nodes": {},
-    "edges": {},
-    "history": {
-        "days": [],
-        "prices": {},
-        "surviving_deciles": {},
-        "strategic_readiness": {},
-        "inventories": {},
-        "congestion_penalty": [],
-    },
-    "events": [],
-}
-```
 
 Use one consistent internal volume unit. The cleanest choice is:
 1. Flows in `thousand barrels per day` (`kbd`)
@@ -140,12 +108,11 @@ household = {
 ```
 
 Recommended initialization:
-1. Split regional civilian demand across 10 deciles with a slight upward weighting toward richer deciles.
-2. Use a monotonic willingness-to-pay curve.
-3. Start with hand-tuned base and ceiling values per node unless you explicitly want GDP/Gini-derived calibration.
+1. Split regional civilian demand across 10 deciles with each decile's MWTP curve based on each region's specific GDP per capita and GINI coefficient
 
 ## Edge Schema
-Each transit edge is a crude route with latency:
+Each transit edge is a crude route with latency based on time to transport and transportation cost per thousand gallons:
+
 
 ```python
 edge = {
