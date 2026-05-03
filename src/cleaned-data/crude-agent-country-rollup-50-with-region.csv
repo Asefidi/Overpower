@@ -1,0 +1,51 @@
+agent_country_key,representative_agent,representative_agent_key,bucket_type,bucket_basis_country,assigned_country,weighted_crude_production_million_bbl_y,unit_count,source_entity_count,source_asset_country_count,region
+aramco-saudi-arabia,Saudi Arabian Oil Co,aramco,top20_company,Saudi Arabia,Saudi Arabia,1930.85,12,1,2,CENTCOM
+national-iranian-oil-iran,National Iranian Oil Co,national-iranian-oil,top20_company,Iran,Iran,1475.333,55,1,2,IRAN
+petrochina-china,PetroChina Co Ltd,petrochina,top20_company,China,China,1063.551022,57,1,4,CHINA
+petrobras-brazil,Petróleo Brasileiro SA,petrobras,top20_company,Brazil,Brazil,922.910199,53,1,2,SOUTHCOM
+rosneft-russia,Rosneft PJSC,rosneft,top20_company,Russia,Russia,868.326283,55,1,1,RUSSIA
+exxon-mobil-usa,Exxon Mobil Corp,exxon-mobil,top20_company,United States,United States,624.431495,48,1,12,NORTHCOM
+sonatrach-algeria,Sonatrach SpA,sonatrach,top20_company,Algeria,Algeria,571.789198,12,1,1,AFRICOM
+adnoc-uae,Abu Dhabi National Oil Co,adnoc,top20_company,United Arab Emirates,United Arab Emirates,560.8602,14,1,1,CENTCOM
+lukoil-russia,LUKOIL PJSC,lukoil,top20_company,Russia,Russia,504.271394,37,1,4,RUSSIA
+bp-iraq,BP PLC,bp,top20_company,Iraq,Iraq,499.070177,69,1,10,CENTCOM
+totalenergies-iraq,TotalEnergies SE,totalenergies,top20_company,Iraq,Iraq,460.831932,138,1,18,CENTCOM
+pemex-mexico,Petróleos Mexicanos EPE,pemex,top20_company,Mexico,Mexico,450.48934,58,1,1,NORTHCOM
+shell-brazil,Shell PLC,shell,top20_company,Brazil,Brazil,382.018891,86,1,13,SOUTHCOM
+chevron-usa,Chevron Corp,chevron,top20_company,United States,United States,376.846261,91,1,14,NORTHCOM
+waha-oil-libya,Waha Oil Co,waha-oil,top20_company,Libya,Libya,340.402,4,1,1,AFRICOM
+conocophillips-usa,ConocoPhillips Corp,conocophillips,top20_company,United States,United States,330.011518,55,1,6,NORTHCOM
+occidental-petroleum-usa,Occidental Petroleum Corp,occidental-petroleum,top20_company,United States,United States,317.921483,36,1,5,NORTHCOM
+pdvsa-venezuela,Petróleos de Venezuela SA,pdvsa,top20_company,Venezuela,Venezuela,306.707,32,1,1,SOUTHCOM
+diamondback-energy-usa,Diamondback Energy Inc,diamondback-energy,top20_company,United States,United States,305.63,10,1,1,NORTHCOM
+nnpc-nigeria,NNPC Ltd,nnpc,top20_company,Nigeria,Nigeria,304.685714,143,1,1,AFRICOM
+misc-american-usa,misc-American,misc-american,misc_country,United States,United States,1151.635758,446,187,6,NORTHCOM
+misc-russian-russia,misc-Russian,misc-russian,misc_country,Russia,Russia,786.034275,86,22,12,RUSSIA
+misc-iraqi-iraq,misc-Iraqi,misc-iraqi,misc_country,Iraq,Iraq,693.935189,45,27,7,CENTCOM
+misc-norwegian-norway,misc-Norwegian,misc-norwegian,misc_country,Norway,Norway,677.26191,154,17,9,EUCOM
+misc-canadian-canada,misc-Canadian,misc-canadian,misc_country,Canada,Canada,521.204121,31,9,6,NORTHCOM
+misc-angolan-angola,misc-Angolan,misc-angolan,misc_country,Angola,Angola,368.473274,59,9,16,AFRICOM
+misc-chinese-china,misc-Chinese,misc-chinese,misc_country,China,China,367.688568,66,13,7,CHINA
+misc-libyan-libya,misc-Libyan,misc-libyan,misc_country,Libya,Libya,350.52885,88,6,11,AFRICOM
+misc-kuwaiti-kuwait,misc-Kuwaiti,misc-kuwaiti,misc_country,Kuwait,Kuwait,342.4119,11,2,2,CENTCOM
+misc-other-other,misc-Other,misc-other,misc_other,Other,Other,302.148963,91,60,33,INDOPACOM
+misc-south-sudanese-south-sudan,misc-South Sudanese,misc-south-sudanese,misc_country,South Sudan,South Sudan,286.415262,27,3,9,AFRICOM
+misc-qatari-qatar,misc-Qatari,misc-qatari,misc_country,Qatar,Qatar,269.06917,18,3,4,CENTCOM
+misc-nigerian-nigeria,misc-Nigerian,misc-nigerian,misc_country,Nigeria,Nigeria,222.870218,110,39,2,AFRICOM
+misc-colombian-colombia,misc-Colombian,misc-colombian,misc_country,Colombia,Colombia,198.778893,60,13,2,SOUTHCOM
+misc-malaysian-malaysia,misc-Malaysian,misc-malaysian,misc_country,Malaysia,Malaysia,190.857042,22,4,8,INDOPACOM
+misc-brazilian-brazil,misc-Brazilian,misc-brazilian,misc_country,Brazil,Brazil,190.212684,109,24,11,SOUTHCOM
+misc-emirati-uae,misc-Emirati,misc-emirati,misc_country,United Arab Emirates,United Arab Emirates,190.11734,38,5,13,CENTCOM
+misc-egyptian-egypt,misc-Egyptian,misc-egyptian,misc_country,Egypt,Egypt,183.242945,30,12,8,CENTCOM
+misc-omani-oman,misc-Omani,misc-omani,misc_country,Oman,Oman,148.95492,18,8,5,CENTCOM
+misc-british-uk,misc-British,misc-british,misc_country,United Kingdom,United Kingdom,139.363929,253,57,5,EUCOM
+misc-kazakh-kazakhstan,misc-Kazakh,misc-kazakh,misc_country,Kazakhstan,Kazakhstan,136.900532,18,20,2,CENTCOM
+misc-ecuadorian-ecuador,misc-Ecuadorian,misc-ecuadorian,misc_country,Ecuador,Ecuador,116.46514,44,7,3,SOUTHCOM
+misc-argentine-argentina,misc-Argentine,misc-argentine,misc_country,Argentina,Argentina,115.243679,76,25,7,SOUTHCOM
+misc-indonesian-indonesia,misc-Indonesian,misc-indonesian,misc_country,Indonesia,Indonesia,107.576,8,17,1,INDOPACOM
+misc-guyanese-guyana,misc-Guyanese,misc-guyanese,misc_country,Guyana,Guyana,99.106955,6,2,4,SOUTHCOM
+misc-venezuelan-venezuela,misc-Venezuelan,misc-venezuelan,misc_country,Venezuela,Venezuela,98.40438,14,11,1,SOUTHCOM
+misc-azerbaijani-azerbaijan,misc-Azerbaijani,misc-azerbaijani,misc_country,Azerbaijan,Azerbaijan,85.720578,16,4,8,EUCOM
+misc-australian-australia,misc-Australian,misc-australian,misc_country,Australia,Australia,71.476526,29,6,3,INDOPACOM
+misc-indian-india,misc-Indian,misc-indian,misc_country,India,India,60.427568,11,1,4,INDOPACOM
+misc-thai-thailand,misc-Thai,misc-thai,misc_country,Thailand,Thailand,55.150325,41,9,9,INDOPACOM
